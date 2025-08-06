@@ -163,15 +163,9 @@ void setup() {
   setupButtons();
   setupESPNOW();
 
-  // Invert and restore display, pausing in-between
-  display.invertDisplay(true);
-  delay(500);
-  display.invertDisplay(false);
-  delay(500);
-
+  // Clear display and wipe in logo for 2s
   display.clearDisplay();
-  display.display();
-
+  logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, true, 20);
   delay(2000);
 }
 
@@ -335,7 +329,8 @@ void enterState(RemoteState newState) {
 void updateStateMachine() {
   switch (currentState) {
     case BOOT:
-      // Initialization done, move to disconnected to wait for communication
+      // Wipe out logo before transitioning
+      logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false, 20);
       enterState(DISCONNECTED);
       break;
 
@@ -351,8 +346,11 @@ void updateStateMachine() {
         // Transition to IDLE if connected
         if (isConnected) {
           enterState(IDLE);
+          break;
         }
       }
+
+      drawDisconnectedScreen();
       break;
 
     case IDLE:
@@ -434,7 +432,7 @@ void logo_wipe(const uint8_t *bitmap, uint8_t bmp_width, uint8_t bmp_height, boo
   }
 }
 
-void drawStatusIcons() {
+void drawBatteryIcon() {
   // Battery icon (top left)
   int batteryX = 0;
   int batteryY = 0;
@@ -451,7 +449,9 @@ void drawStatusIcons() {
     display.setCursor(batteryX + batteryW + 5, batteryY);
     display.print("!"); // exclamation mark
   }
+}
 
+void drawConnectionIcon() {
   // Connection icon (top right)
   int connX = SCREEN_WIDTH - 16;
   int connY = 2;
@@ -480,6 +480,16 @@ void drawButtonHints(const char* left, const char* down, const char* up, const c
   display.print(right);
 }
 
+void drawButtonHints(const uint8_t *left, const uint8_t *down, const uint8_t *up, const uint8_t *right) {
+  int iconW = 32;
+  int iconY = 6;
+  
+  display.drawBitmap(2, SCREEN_HEIGHT - iconY, left, 6, 6, WHITE);
+  display.drawBitmap(34, SCREEN_HEIGHT - iconY, up, 6, 6, WHITE);
+  display.drawBitmap(66, SCREEN_HEIGHT - iconY, down, 6, 6, WHITE);
+  display.drawBitmap(98, SCREEN_HEIGHT - iconY, right, 6, 6, WHITE);
+}
+
 void drawCompressorVentIcons() {
   int centerX = (SCREEN_WIDTH - 44) / 2;
   int centerY = (SCREEN_HEIGHT - 17) / 2;
@@ -489,6 +499,30 @@ void drawCompressorVentIcons() {
   if (isVentOpen) {
     display.drawBitmap(centerX + 24, centerY, icon_vent, 20, 17, WHITE);
   }
+}
+
+void drawDisconnectedScreen() {
+  display.clearDisplay();
+  drawBatteryIcon();
+
+  // Centered text
+  display.setTextSize(2);
+  display.setTextColor(WHITE);
+  int16_t x, y;
+  uint16_t w, h;
+  if (!isConnected) {
+    display.getTextBounds("Disconnected", 0, 0, &x, &y, &w, &h);
+    display.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT - h) / 2);
+    display.print("Disconnected");
+    // Button hint: right arrow
+    drawButtonHints("", "", "", icon_arrow_right);
+  } else {
+    display.getTextBounds("Connecting...", 0, 0, &x, &y, &w, &h);
+    display.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT - h) / 2);
+    display.print("Connecting...");
+    drawButtonHints("", "", "", "");
+  }
+  display.display();
 }
 #pragma endregion
 
