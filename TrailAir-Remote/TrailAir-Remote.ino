@@ -38,6 +38,27 @@ static const unsigned char PROGMEM logo_bmp [] = {
 	0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 
 	0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0
 };
+
+// 'compressor', 20x17px
+static const unsigned char PROGMEM icon_compressor [] = {
+	0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 
+	0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 
+	0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 
+	0xff, 0xff, 0xf0
+};
+// 'vent', 20x17px
+static const unsigned char PROGMEM icon_vent [] = {
+	0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 
+	0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 
+	0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 
+	0xff, 0xff, 0xf0
+};
+#pragma endregion
+
+#pragma region Battery Variables
+#define BATTERY_PIN    2 // A0, GPIO2
+float batteryVoltage = 0.0;
+int batteryPercent = 0;
 #pragma endregion
 
 #pragma region Button Variables
@@ -61,6 +82,28 @@ bool btnRightPressed = false;
 
 const unsigned long SLEEP_TIMEOUT = 60000; // ms
 unsigned long lastButtonPressedTime = 0;
+
+// Manual sleep logic variables
+unsigned long leftPressStart = 0;
+bool sleepSequenceStarted = false;
+
+// Icons for button hints
+// 'arrow_down', 6x6px
+static const unsigned char PROGMEM icon_arrow_down [] = {
+	0x30, 0x30, 0x30, 0xfc, 0x78, 0x30
+};
+// 'arrow_right', 6x6px
+static const unsigned char PROGMEM icon_arrow_right [] = {
+	0x10, 0x18, 0xfc, 0xfc, 0x18, 0x10
+};
+// 'arrow_up', 6x6px
+static const unsigned char PROGMEM icon_arrow_up [] = {
+	0x30, 0x78, 0xfc, 0x30, 0x30, 0x30
+};
+// 'cancel', 6x6px
+static const unsigned char PROGMEM icon_cancel [] = {
+	0x84, 0x48, 0x30, 0x30, 0x48, 0x84
+};
 #pragma endregion 
 
 #pragma region ESP-NOW Variables
@@ -94,6 +137,8 @@ struct QueuedMessage {
 std::deque<QueuedMessage> messageQueue;
 const int MAX_RETRIES = 5;
 const unsigned long RESEND_INTERVAL = 500; // ms
+
+float targetPSI = 20.0; // Default target PSI
 #pragma endregion
 
 #pragma region State machine variables
@@ -180,23 +225,40 @@ void loop() {
   logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, true);  // wipe in from left
   delay(3000);
   logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false); // wipe out from left
-
-  // 1. Get values from control board (ESP-NOW, async)
   
-  // 2. Read buttons
+  // Read buttons
   updateButtons();
 
-  // 3. Update State Machine
+  // Check battery voltage
+  updateBatteryStatus();
+
+  // Update State Machine
   updateConnectionStatus();
   updateStateMachine();
 
-  // 4. Handle display updates
+  // Handle display updates
+  drawStatusIcons();
+  drawButtonHints("Retry", "PSI-", "PSI+", "Start");
+  drawCompressorVentIcons();
 
-  // 5. Send data to control board (ESP-NOW)
+  // Process ESP-NOW message queue
   processMessageQueue();
 }
 
 
+void updateBatteryStatus() {
+  // Read voltage at divider
+  uint32_t mv = analogReadMilliVolts(BATTERY_PIN);
+  batteryVoltage = (float)mv * 2.0 / 1000.0; // Convert to volts
+
+  // Estimate percentage (simple linear, adjust as needed)
+  batteryPercent = (int)(((batteryVoltage - 3.3) / (4.2 - 3.3)) * 100.0);
+  if (batteryPercent > 100) batteryPercent = 100;
+  if (batteryPercent < 0) batteryPercent = 0;
+}
+
+
+#pragma region Button Functions
 void updateButtons() {
   btnLeft.loop();
   btnDown.loop();
@@ -207,6 +269,22 @@ void updateButtons() {
   btnDownPressed  = btnDown.isPressed();
   btnUpPressed    = btnUp.isPressed();
   btnRightPressed = btnRight.isPressed();
+
+  // Manual sleep logic
+  if (btnLeftPressed) {
+    // Mark the beginning of when the left button was pressed
+    if (leftPressStart == 0) 
+      leftPressStart = millis();
+
+    // Start sleep sequence if held for 5 seconds
+    if (!sleepSequenceStarted && (millis() - leftPressStart >= 5000)) {
+      Serial.println("Manual sleep initiated.");
+      goToDeepSleep();
+    }
+  } else {
+    leftPressStart = 0;
+    sleepSequenceStarted = false;
+  }
 
   if (btnLeftPressed || btnRightPressed || btnUpPressed || btnDownPressed) {
     // reset sleep timer
@@ -221,7 +299,22 @@ void updateButtons() {
   // TODO: long press on left button puts the remote to sleep
 }
 
+void goToDeepSleep() {
+  Serial.println("Entering deep sleep...");
 
+  sleepSequenceStarted = true;
+  drawLogo();
+  delay(1000);
+  logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false, 20);
+  
+  // GPIO10 = ext0 wake source (must be RTC_GPIO capable)
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_10, 0);  // Wake on LOW signal
+  esp_deep_sleep_start();
+}
+#pragma endregion
+
+
+#pragma region State Machine Functions
 void enterState(RemoteState newState) {
   previousState = currentState;
   currentState = newState;
@@ -241,23 +334,42 @@ void enterState(RemoteState newState) {
 
 void updateStateMachine() {
   switch (currentState) {
-
     case BOOT:
       // Initialization done, move to disconnected to wait for communication
       enterState(DISCONNECTED);
       break;
 
     case DISCONNECTED:
-      // Wait for user to press retry button (BTN1) to reconnect
-      // If reconnect is successful, transition to IDLE
-      if (isConnected) {
-        enterState(IDLE);
+      // Wait for user to press retry button (BTN_RIGHT) to reconnect
+      if (btnRightPressed) {
+        // Retry connection logic
+        if (!isConnected) {
+          Serial.println("Retrying connection...");
+          setupESPNOW();
+        }
+
+        // Transition to IDLE if connected
+        if (isConnected) {
+          enterState(IDLE);
+        }
       }
       break;
 
     case IDLE:
       // Allow user to set PSI and send command
-      // If a command is queued (e.g., start), enter SEEKING
+      if (btnUpPressed) {
+        targetPSI += 1.0;
+        if (targetPSI > 50.0) targetPSI = 50.0; // Max PSI
+      }
+      if (btnDownPressed) {
+        targetPSI -= 1.0;
+        if (targetPSI < 5.0) targetPSI = 5.0; // Min PSI
+      }
+      if (btnRightPressed) {
+        // Start air-up/air-down process
+        sendStartCommand(targetPSI);
+        enterState(SEEKING);
+      }
       // If connection is lost, go back to DISCONNECTED
       if (!isConnected) {
         enterState(DISCONNECTED);
@@ -265,8 +377,11 @@ void updateStateMachine() {
       break;
 
     case SEEKING:
-      // Waiting for target PSI to be reached
-      // Cancelable by user
+      // Cancelable by user (BTN_RIGHT)
+      if (btnRightPressed) {
+        sendCancelCommand();
+        enterState(IDLE);
+      }
       // If complete or error received, go to IDLE or ERROR
       if (!isConnected) {
         enterState(DISCONNECTED);
@@ -279,23 +394,19 @@ void updateStateMachine() {
 
     case ERROR:
       // Display error, wait for user action or timeout to return to IDLE
+      if (btnRightPressed) {
+        enterState(IDLE); // User acknowledges error
+      }
       if (millis() - stateEntryTime > 3000) { // auto-clear after 3s
         enterState(IDLE);
       }
       break;
   }
 }
+#pragma endregion
 
 
-void goToDeepSleep() {
-  Serial.println("Entering deep sleep...");
-  
-  // GPIO10 = ext0 wake source (must be RTC_GPIO capable)
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_10, 0);  // Wake on LOW signal
-  esp_deep_sleep_start();
-}
-
-
+#pragma region Display Functions
 void drawLogo(void) {
   display.clearDisplay();
   display.drawBitmap(0, 0, logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, 1);
@@ -323,7 +434,66 @@ void logo_wipe(const uint8_t *bitmap, uint8_t bmp_width, uint8_t bmp_height, boo
   }
 }
 
+void drawStatusIcons() {
+  // Battery icon (top left)
+  int batteryX = 0;
+  int batteryY = 0;
+  int batteryW = 20;
+  int batteryH = 10;
+  int fillW = (int)((batteryPercent / 100.0) * (batteryW - 4));
+  display.drawRect(batteryX, batteryY, batteryW, batteryH, WHITE); // battery outline
+  display.drawRect(batteryX + batteryW, batteryY + 3, 2, 4, WHITE); // battery nub
+  display.fillRect(batteryX + 2, batteryY + 2, fillW, batteryH - 4, WHITE); // battery fill
 
+  if (batteryPercent < 15) {
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
+    display.setCursor(batteryX + batteryW + 5, batteryY);
+    display.print("!"); // exclamation mark
+  }
+
+  // Connection icon (top right)
+  int connX = SCREEN_WIDTH - 16;
+  int connY = 2;
+
+  // Airwave cone (3 arcs)
+  display.drawPixel(connX, connY + 7, WHITE);
+  display.drawCircle(connX, connY + 7, 3, WHITE);
+  display.drawCircle(connX, connY + 7, 6, WHITE);
+
+  if (!isConnected) 
+    display.drawLine(connX - 8, connY, connX + 8, connY + 14, WHITE); // diagonal slash
+}
+
+void drawButtonHints(const char* left, const char* down, const char* up, const char* right) {
+  int iconW = 32;
+  int iconY = SCREEN_HEIGHT - 10;
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(2, iconY);
+  display.print(left);
+  display.setCursor(34, iconY);
+  display.print(down);
+  display.setCursor(66, iconY);
+  display.print(up);
+  display.setCursor(98, iconY);
+  display.print(right);
+}
+
+void drawCompressorVentIcons() {
+  int centerX = (SCREEN_WIDTH - 44) / 2;
+  int centerY = (SCREEN_HEIGHT - 17) / 2;
+  if (isCompressorOn) {
+    display.drawBitmap(centerX, centerY, icon_compressor, 20, 17, WHITE);
+  }
+  if (isVentOpen) {
+    display.drawBitmap(centerX + 24, centerY, icon_vent, 20, 17, WHITE);
+  }
+}
+#pragma endregion
+
+
+#pragma region Communications
 void sendStartCommand(float targetPSI) {
   StaticJsonDocument<JSON_SEND_SIZE> doc;
   doc["cmd"] = "start";
@@ -428,3 +598,4 @@ void updateConnectionStatus() {
     isConnected = false;
   }
 }
+#pragma endregion
