@@ -1,0 +1,32 @@
+{
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": true,
+  "editor.tabSize": 2,
+  "C_Cpp.errorSquiggles": "enabled",
+  "files.exclude": {
+    "**/.git": true, // this is a default value
+    "**/.DS_Store": true, // this is a default value
+
+    "**/node_modules": true, // this excludes all folders
+    // named "node_modules" from
+    // the explore tree
+
+    // alternative version
+    "node_modules": true // this excludes the folder
+    // only from the root of
+    // your workspace
+  },
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+  "python.analysis.typeCheckingMode": "basic",
+  "files.associations": {
+    "*.ino": "cpp",
+    "*.cps": "javascript",
+    "chrono": "cpp",
+    "ostream": "cpp"
+  }
+}

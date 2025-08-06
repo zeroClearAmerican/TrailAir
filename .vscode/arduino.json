@@ -1,0 +1,5 @@
+{
+    "board": "esp32:esp32:esp32doit-devkit-v1",
+    "port": "COM3",
+    "sketch": "emb-devices\\dual-rgb-dot-node\\dual-rgb-dot-node.ino"
+}
