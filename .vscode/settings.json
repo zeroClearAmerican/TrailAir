@@ -27,6 +27,7 @@
     "*.ino": "cpp",
     "*.cps": "javascript",
     "chrono": "cpp",
-    "ostream": "cpp"
+    "ostream": "cpp",
+    "cstdint": "cpp"
   }
 }

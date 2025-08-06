@@ -1,30 +1,15 @@
-#include <ezButton.h>
-#include <esp_sleep.h>
-
 #include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-#pragma region Button Variables
-// GPIO pins for each button
-#define BTN_LEFT_PIN   10  // retry / wake
-#define BTN_DOWN_PIN   9
-#define BTN_UP_PIN     8
-#define BTN_RIGHT_PIN  20
+#include <ezButton.h>
+#include <esp_sleep.h>
 
-// Setup ezButton objects
-ezButton btnLeft(BTN_LEFT_PIN, INPUT_PULLUP);
-ezButton btnDown(BTN_DOWN_PIN, INPUT_PULLUP);
-ezButton btnUp(BTN_UP_PIN, INPUT_PULLUP);
-ezButton btnRight(BTN_RIGHT_PIN, INPUT_PULLUP);
-
-// Track button presses for use in state logic
-bool btnLeftPressed = false;
-bool btnDownPressed = false;
-bool btnUpPressed = false;
-bool btnRightPressed = false;
-#pragma endregion 
+#include <WiFi.h>
+#include <esp_now.h>
+#include <deque>
+#include <ArduinoJson.h>
 
 #pragma region Screen Variables
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
@@ -55,22 +40,83 @@ static const unsigned char PROGMEM logo_bmp [] = {
 };
 #pragma endregion
 
+#pragma region Button Variables
+// GPIO pins for each button
+#define BTN_LEFT_PIN   10  // retry / wake
+#define BTN_DOWN_PIN   9
+#define BTN_UP_PIN     8
+#define BTN_RIGHT_PIN  20
+
+// Setup ezButton objects
+ezButton btnLeft(BTN_LEFT_PIN, INPUT_PULLUP);
+ezButton btnDown(BTN_DOWN_PIN, INPUT_PULLUP);
+ezButton btnUp(BTN_UP_PIN, INPUT_PULLUP);
+ezButton btnRight(BTN_RIGHT_PIN, INPUT_PULLUP);
+
+// Track button presses for use in state logic
+bool btnLeftPressed = false;
+bool btnDownPressed = false;
+bool btnUpPressed = false;
+bool btnRightPressed = false;
+
+const unsigned long SLEEP_TIMEOUT = 60000; // ms
+unsigned long lastButtonPressedTime = 0;
+#pragma endregion 
+
+#pragma region ESP-NOW Variables
+// Replace with your control board MAC
+uint8_t controlBoardAddress[] = { 0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF }; // example
+
+unsigned long lastPacketReceivedTime = 0;
+const unsigned long CONNECTION_TIMEOUT = 5000; // ms
+bool isConnected = false;
+float latestPSI = 0.0;
+char lastStatus[32] = "Disconnected";
+bool isCompressorOn = false;
+bool isVentOpen = false;
+
+// Structure for outbound command
+typedef struct {
+  char cmd[16];
+  float targetPSI;
+} OutgoingMessage;
+
+// JSON buffer sizes (tweak if needed)
+const size_t JSON_SEND_SIZE = 64;
+const size_t JSON_RECV_SIZE = 128;
+
+struct QueuedMessage {
+  String payload;
+  uint8_t retriesLeft;
+  unsigned long lastSentTime;
+};
+
+std::deque<QueuedMessage> messageQueue;
+const int MAX_RETRIES = 5;
+const unsigned long RESEND_INTERVAL = 500; // ms
+#pragma endregion
+
+#pragma region State machine variables
+enum RemoteState {
+  BOOT,
+  DISCONNECTED,
+  IDLE,
+  SEEKING,
+  ERROR
+};
+
+RemoteState currentState = BOOT;
+RemoteState previousState = BOOT;
+
+unsigned long stateEntryTime = 0;
+#pragma endregion
 
 void setup() {
   Serial.begin(115200);
 
-  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    Serial.println(F("SSD1306 OLED screen allocation failed"));
-    for(;;); // Don't proceed, loop forever
-  }
-
-  drawLogo();    // Draw the logo
-
-  btnLeft.setDebounceTime(50);
-  btnDown.setDebounceTime(50);
-  btnUp.setDebounceTime(50);
-  btnRight.setDebounceTime(50);
+  setupScreen();
+  setupButtons();
+  setupESPNOW();
 
   // Invert and restore display, pausing in-between
   display.invertDisplay(true);
@@ -84,14 +130,74 @@ void setup() {
   delay(2000);
 }
 
+void setupScreen() {
+  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
+  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("SSD1306 OLED screen allocation failed"));
+    for(;;); // Don't proceed, loop forever
+  }
+
+  drawLogo();    // Draw the logo
+}
+
+void setupButtons() {
+  btnLeft.setDebounceTime(50);
+  btnDown.setDebounceTime(50);
+  btnUp.setDebounceTime(50);
+  btnRight.setDebounceTime(50);
+}
+
+void setupESPNOW() {
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
+    return;
+  }
+
+  esp_now_register_recv_cb(onReceiveData);
+  esp_now_register_send_cb(onDataSent);
+
+  // Register control board peer
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, controlBoardAddress, 6);
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
+
+  if (!esp_now_is_peer_exist(controlBoardAddress)) {
+    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+      Serial.println("Failed to add peer");
+      return;
+    }
+  }
+
+  Serial.println("ESP-NOW initialized");
+}
+
+
 void loop() {
   logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, true);  // wipe in from left
   delay(3000);
   logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false); // wipe out from left
 
-  // 1. Get values from control board (ESP-NOW)
+  // 1. Get values from control board (ESP-NOW, async)
   
   // 2. Read buttons
+  updateButtons();
+
+  // 3. Update State Machine
+  updateConnectionStatus();
+  updateStateMachine();
+
+  // 4. Handle display updates
+
+  // 5. Send data to control board (ESP-NOW)
+  processMessageQueue();
+}
+
+
+void updateButtons() {
   btnLeft.loop();
   btnDown.loop();
   btnUp.loop();
@@ -102,10 +208,84 @@ void loop() {
   btnUpPressed    = btnUp.isPressed();
   btnRightPressed = btnRight.isPressed();
 
-  // 3. Update State Machine
-  // 4. Handle display updates
-  // 5. Send data to control board (ESP-NOW)
+  if (btnLeftPressed || btnRightPressed || btnUpPressed || btnDownPressed) {
+    // reset sleep timer
+    lastButtonPressedTime = millis();
+  }
+
+  if (millis() - lastButtonPressedTime > SLEEP_TIMEOUT) {
+    Serial.println("Sleep timeout exceeded.");
+    goToDeepSleep();
+  }
+
+  // TODO: long press on left button puts the remote to sleep
 }
+
+
+void enterState(RemoteState newState) {
+  previousState = currentState;
+  currentState = newState;
+  stateEntryTime = millis();
+
+  Serial.print("Transitioning to state: ");
+  switch (newState) {
+    case BOOT:         Serial.println("BOOT"); break;
+    case DISCONNECTED: Serial.println("DISCONNECTED"); break;
+    case IDLE:         Serial.println("IDLE"); break;
+    case SEEKING:      Serial.println("SEEKING"); break;
+    case ERROR:        Serial.println("ERROR"); break;
+  }
+
+  // Add any enter-once logic here if needed
+}
+
+void updateStateMachine() {
+  switch (currentState) {
+
+    case BOOT:
+      // Initialization done, move to disconnected to wait for communication
+      enterState(DISCONNECTED);
+      break;
+
+    case DISCONNECTED:
+      // Wait for user to press retry button (BTN1) to reconnect
+      // If reconnect is successful, transition to IDLE
+      if (isConnected) {
+        enterState(IDLE);
+      }
+      break;
+
+    case IDLE:
+      // Allow user to set PSI and send command
+      // If a command is queued (e.g., start), enter SEEKING
+      // If connection is lost, go back to DISCONNECTED
+      if (!isConnected) {
+        enterState(DISCONNECTED);
+      }
+      break;
+
+    case SEEKING:
+      // Waiting for target PSI to be reached
+      // Cancelable by user
+      // If complete or error received, go to IDLE or ERROR
+      if (!isConnected) {
+        enterState(DISCONNECTED);
+      } else if (strcmp(lastStatus, "done") == 0) {
+        enterState(IDLE);
+      } else if (strcmp(lastStatus, "error") == 0) {
+        enterState(ERROR);
+      }
+      break;
+
+    case ERROR:
+      // Display error, wait for user action or timeout to return to IDLE
+      if (millis() - stateEntryTime > 3000) { // auto-clear after 3s
+        enterState(IDLE);
+      }
+      break;
+  }
+}
+
 
 void goToDeepSleep() {
   Serial.println("Entering deep sleep...");
@@ -115,239 +295,6 @@ void goToDeepSleep() {
   esp_deep_sleep_start();
 }
 
-void testdrawline() {
-  int16_t i;
-
-  display.clearDisplay(); // Clear display buffer
-
-  for(i=0; i<display.width(); i+=4) {
-    display.drawLine(0, 0, i, display.height()-1, SSD1306_WHITE);
-    display.display(); // Update screen with each newly-drawn line
-    delay(1);
-  }
-  for(i=0; i<display.height(); i+=4) {
-    display.drawLine(0, 0, display.width()-1, i, SSD1306_WHITE);
-    display.display();
-    delay(1);
-  }
-  delay(250);
-
-  display.clearDisplay();
-
-  for(i=0; i<display.width(); i+=4) {
-    display.drawLine(0, display.height()-1, i, 0, SSD1306_WHITE);
-    display.display();
-    delay(1);
-  }
-  for(i=display.height()-1; i>=0; i-=4) {
-    display.drawLine(0, display.height()-1, display.width()-1, i, SSD1306_WHITE);
-    display.display();
-    delay(1);
-  }
-  delay(250);
-
-  display.clearDisplay();
-
-  for(i=display.width()-1; i>=0; i-=4) {
-    display.drawLine(display.width()-1, display.height()-1, i, 0, SSD1306_WHITE);
-    display.display();
-    delay(1);
-  }
-  for(i=display.height()-1; i>=0; i-=4) {
-    display.drawLine(display.width()-1, display.height()-1, 0, i, SSD1306_WHITE);
-    display.display();
-    delay(1);
-  }
-  delay(250);
-
-  display.clearDisplay();
-
-  for(i=0; i<display.height(); i+=4) {
-    display.drawLine(display.width()-1, 0, 0, i, SSD1306_WHITE);
-    display.display();
-    delay(1);
-  }
-  for(i=0; i<display.width(); i+=4) {
-    display.drawLine(display.width()-1, 0, i, display.height()-1, SSD1306_WHITE);
-    display.display();
-    delay(1);
-  }
-
-  delay(2000); // Pause for 2 seconds
-}
-
-void testdrawrect(void) {
-  display.clearDisplay();
-
-  for(int16_t i=0; i<display.height()/2; i+=2) {
-    display.drawRect(i, i, display.width()-2*i, display.height()-2*i, SSD1306_WHITE);
-    display.display(); // Update screen with each newly-drawn rectangle
-    delay(1);
-  }
-
-  delay(2000);
-}
-
-void testfillrect(void) {
-  display.clearDisplay();
-
-  for(int16_t i=0; i<display.height()/2; i+=3) {
-    // The INVERSE color is used so rectangles alternate white/black
-    display.fillRect(i, i, display.width()-i*2, display.height()-i*2, SSD1306_INVERSE);
-    display.display(); // Update screen with each newly-drawn rectangle
-    delay(1);
-  }
-
-  delay(2000);
-}
-
-void testdrawcircle(void) {
-  display.clearDisplay();
-
-  for(int16_t i=0; i<max(display.width(),display.height())/2; i+=2) {
-    display.drawCircle(display.width()/2, display.height()/2, i, SSD1306_WHITE);
-    display.display();
-    delay(1);
-  }
-
-  delay(2000);
-}
-
-void testfillcircle(void) {
-  display.clearDisplay();
-
-  for(int16_t i=max(display.width(),display.height())/2; i>0; i-=3) {
-    // The INVERSE color is used so circles alternate white/black
-    display.fillCircle(display.width() / 2, display.height() / 2, i, SSD1306_INVERSE);
-    display.display(); // Update screen with each newly-drawn circle
-    delay(1);
-  }
-
-  delay(2000);
-}
-
-void testdrawroundrect(void) {
-  display.clearDisplay();
-
-  for(int16_t i=0; i<display.height()/2-2; i+=2) {
-    display.drawRoundRect(i, i, display.width()-2*i, display.height()-2*i,
-      display.height()/4, SSD1306_WHITE);
-    display.display();
-    delay(1);
-  }
-
-  delay(2000);
-}
-
-void testfillroundrect(void) {
-  display.clearDisplay();
-
-  for(int16_t i=0; i<display.height()/2-2; i+=2) {
-    // The INVERSE color is used so round-rects alternate white/black
-    display.fillRoundRect(i, i, display.width()-2*i, display.height()-2*i,
-      display.height()/4, SSD1306_INVERSE);
-    display.display();
-    delay(1);
-  }
-
-  delay(2000);
-}
-
-void testdrawtriangle(void) {
-  display.clearDisplay();
-
-  for(int16_t i=0; i<max(display.width(),display.height())/2; i+=5) {
-    display.drawTriangle(
-      display.width()/2  , display.height()/2-i,
-      display.width()/2-i, display.height()/2+i,
-      display.width()/2+i, display.height()/2+i, SSD1306_WHITE);
-    display.display();
-    delay(1);
-  }
-
-  delay(2000);
-}
-
-void testfilltriangle(void) {
-  display.clearDisplay();
-
-  for(int16_t i=max(display.width(),display.height())/2; i>0; i-=5) {
-    // The INVERSE color is used so triangles alternate white/black
-    display.fillTriangle(
-      display.width()/2  , display.height()/2-i,
-      display.width()/2-i, display.height()/2+i,
-      display.width()/2+i, display.height()/2+i, SSD1306_INVERSE);
-    display.display();
-    delay(1);
-  }
-
-  delay(2000);
-}
-
-void testdrawchar(void) {
-  display.clearDisplay();
-
-  display.setTextSize(1);      // Normal 1:1 pixel scale
-  display.setTextColor(SSD1306_WHITE); // Draw white text
-  display.setCursor(0, 0);     // Start at top-left corner
-  display.cp437(true);         // Use full 256 char 'Code Page 437' font
-
-  // Not all the characters will fit on the display. This is normal.
-  // Library will draw what it can and the rest will be clipped.
-  for(int16_t i=0; i<256; i++) {
-    if(i == '\n') display.write(' ');
-    else          display.write(i);
-  }
-
-  display.display();
-  delay(2000);
-}
-
-void testdrawstyles(void) {
-  display.clearDisplay();
-
-  display.setTextSize(1);             // Normal 1:1 pixel scale
-  display.setTextColor(SSD1306_WHITE);        // Draw white text
-  display.setCursor(0,0);             // Start at top-left corner
-  display.println(F("Hello, world!"));
-
-  display.setTextColor(SSD1306_BLACK, SSD1306_WHITE); // Draw 'inverse' text
-  display.println(3.141592);
-
-  display.setTextSize(2);             // Draw 2X-scale text
-  display.setTextColor(SSD1306_WHITE);
-  display.print(F("0x")); display.println(0xDEADBEEF, HEX);
-
-  display.display();
-  delay(2000);
-}
-
-void testscrolltext(void) {
-  display.clearDisplay();
-
-  display.setTextSize(2); // Draw 2X-scale text
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(10, 0);
-  display.println(F("scroll"));
-  display.display();      // Show initial text
-  delay(100);
-
-  // Scroll in various directions, pausing in-between:
-  display.startscrollright(0x00, 0x0F);
-  delay(2000);
-  display.stopscroll();
-  delay(1000);
-  display.startscrollleft(0x00, 0x0F);
-  delay(2000);
-  display.stopscroll();
-  delay(1000);
-  display.startscrolldiagright(0x00, 0x07);
-  delay(2000);
-  display.startscrolldiagleft(0x00, 0x07);
-  delay(2000);
-  display.stopscroll();
-  delay(1000);
-}
 
 void drawLogo(void) {
   display.clearDisplay();
@@ -373,5 +320,111 @@ void logo_wipe(const uint8_t *bitmap, uint8_t bmp_width, uint8_t bmp_height, boo
 
     display.display();
     delay(delay_ms);
+  }
+}
+
+
+void sendStartCommand(float targetPSI) {
+  StaticJsonDocument<JSON_SEND_SIZE> doc;
+  doc["cmd"] = "start";
+  doc["target_psi"] = targetPSI;
+
+  char payload[JSON_SEND_SIZE];
+  serializeJson(doc, payload);
+
+  queueMessage(doc);
+}
+
+void sendCancelCommand() {
+  StaticJsonDocument<JSON_SEND_SIZE> doc;
+  doc["cmd"] = "cancel";
+
+  char payload[JSON_SEND_SIZE];
+  serializeJson(doc, payload);
+
+  queueMessage(doc);
+}
+
+void onReceiveData(const uint8_t *mac, const uint8_t *incomingData, int len) {
+  lastPacketReceivedTime = millis(); // update timestamp
+
+  StaticJsonDocument<JSON_RECV_SIZE> doc;
+  DeserializationError error = deserializeJson(doc, incomingData, len);
+
+  if (error) {
+    Serial.println("JSON decode failed");
+    return;
+  }
+
+  if (doc.containsKey("psi")) {
+    latestPSI = doc["psi"];
+  }
+
+  if (doc.containsKey("comp")) {
+    isCompressorOn = doc["comp"];
+  }
+
+  if (doc.containsKey("vent")) {
+    isVentOpen = doc["vent"];
+  }
+
+  if (doc.containsKey("status")) {
+    strncpy(lastStatus, doc["status"], sizeof(lastStatus));
+    isConnected = true;
+    Serial.printf("Received status: %s\n", lastStatus);
+  }
+}
+
+void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  Serial.printf("Last Packet Send Status: %s\n", status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
+}
+
+void queueMessage(const JsonDocument& doc) {
+  String payload;
+  serializeJson(doc, payload);
+
+  QueuedMessage msg = {
+    .payload = payload,
+    .retriesLeft = MAX_RETRIES,
+    .lastSentTime = 0
+  };
+
+  messageQueue.push_back(msg);
+  Serial.println("Message queued:");
+  Serial.println(payload);
+}
+
+void processMessageQueue() {
+  if (messageQueue.empty()) return;
+
+  QueuedMessage& msg = messageQueue.front();
+  unsigned long now = millis();
+
+  if (now - msg.lastSentTime < RESEND_INTERVAL) return;
+
+  esp_err_t result = esp_now_send(controlBoardAddress, (uint8_t*)msg.payload.c_str(), msg.payload.length());
+  msg.lastSentTime = now;
+
+  if (result == ESP_OK) {
+    Serial.println("Message sent successfully:");
+    Serial.println(msg.payload);
+    messageQueue.pop_front();
+  } else {
+    Serial.println("Send failed. Will retry...");
+    msg.retriesLeft--;
+    if (msg.retriesLeft == 0) {
+      Serial.println("Max retries reached. Dropping message:");
+      Serial.println(msg.payload);
+      messageQueue.pop_front();
+    }
+  }
+}
+
+void updateConnectionStatus() {
+  if (millis() - lastPacketReceivedTime > CONNECTION_TIMEOUT) {
+    if (isConnected) {
+      Serial.println("Connection lost.");
+    }
+    isConnected = false;
   }
 }
