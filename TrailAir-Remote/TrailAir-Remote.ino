@@ -28,15 +28,15 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // '128-32', 128x32px
 static const unsigned char PROGMEM logo_bmp [] = {
 	0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 
-	0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 
-	0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 
-	0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 
-	0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 
-	0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 
-	0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 
-	0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 
-	0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 
-	0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xe0
+	0xff, 0xff, 0xff, 0xe0, 0xf0, 0x00, 0x00, 0x01, 0xe0, 0xf0, 0x00, 0x00, 0x01, 0xe0, 0xf0, 0x00, 
+	0x00, 0x01, 0xe0, 0xf1, 0xf0, 0x00, 0xf9, 0xe0, 0xf1, 0xf8, 0x00, 0xf9, 0xe0, 0xf1, 0xfc, 0x00, 
+	0xf9, 0xe0, 0xf1, 0xfe, 0x00, 0xf9, 0xe0, 0xf1, 0xff, 0x00, 0xf9, 0xe0, 0xf1, 0xff, 0x80, 0xf9, 
+	0xe0, 0xf1, 0xff, 0xc0, 0xf9, 0xe0, 0xf1, 0xe7, 0xf0, 0xf9, 0xe0, 0xf1, 0xe3, 0xf8, 0xf9, 0xe0, 
+	0xf1, 0xe1, 0xfc, 0xf9, 0xe0, 0xf1, 0xe0, 0xfe, 0xf9, 0xe0, 0xf1, 0xe0, 0x7f, 0xf9, 0xe0, 0xf1, 
+	0xe0, 0x3f, 0xf9, 0xe0, 0xf1, 0xe0, 0x1f, 0xf9, 0xe0, 0xf1, 0xe0, 0x0f, 0xf9, 0xe0, 0xf1, 0xe0, 
+	0x07, 0xf9, 0xe0, 0xf1, 0xe0, 0x03, 0xf9, 0xe0, 0xf1, 0xe0, 0x00, 0xf9, 0xe0, 0xf1, 0xe0, 0x00, 
+	0x01, 0xe0, 0xf1, 0xe0, 0x00, 0x01, 0xe0, 0xf1, 0xe0, 0x00, 0x01, 0xe0, 0xff, 0xe3, 0xff, 0xff, 
+	0xe0, 0xff, 0xe3, 0xff, 0xff, 0xe0, 0xff, 0xe3, 0xff, 0xff, 0xe0, 0xff, 0xe3, 0xff, 0xff, 0xe0
 };
 
 // 'compressor', 20x17px
@@ -215,28 +215,34 @@ void setupESPNOW() {
 }
 
 
-void loop() {
-  logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, true);  // wipe in from left
-  delay(3000);
-  logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false); // wipe out from left
-  
+void loop() {  
   // Read buttons
   updateButtons();
+  Serial.println("Read button states");
 
   // Check battery voltage
   updateBatteryStatus();
+  Serial.printf("Battery: %.2f V (%d%%)\n", batteryVoltage, batteryPercent);
 
   // Update State Machine
   updateConnectionStatus();
+  Serial.println("Updated connection status");
   updateStateMachine();
+  Serial.println("Updated state machine");
 
   // Handle display updates
-  drawStatusIcons();
+  drawBatteryIcon();
+  Serial.println("Drew battery icon");
+  drawConnectionIcon();
+  Serial.println("Drew connection icon");
   drawButtonHints("Retry", "PSI-", "PSI+", "Start");
+  Serial.println("Drew button hints");
   drawCompressorVentIcons();
+  Serial.println("Drew compressor/vent icons");
 
   // Process ESP-NOW message queue
   processMessageQueue();
+  Serial.println("Processed message queue");
 }
 
 
@@ -302,7 +308,7 @@ void goToDeepSleep() {
   logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false, 20);
   
   // GPIO10 = ext0 wake source (must be RTC_GPIO capable)
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_10, 0);  // Wake on LOW signal
+  esp_deep_sleep_enable_gpio_wakeup(BIT(BTN_LEFT_PIN), ESP_GPIO_WAKEUP_GPIO_LOW);
   esp_deep_sleep_start();
 }
 #pragma endregion
@@ -337,6 +343,8 @@ void updateStateMachine() {
     case DISCONNECTED:
       // Wait for user to press retry button (BTN_RIGHT) to reconnect
       if (btnRightPressed) {
+        Serial.println("User requested reconnect.");
+
         // Retry connection logic
         if (!isConnected) {
           Serial.println("Retrying connection...");
@@ -345,6 +353,7 @@ void updateStateMachine() {
 
         // Transition to IDLE if connected
         if (isConnected) {
+          Serial.println("Reconnected successfully.");
           enterState(IDLE);
           break;
         }
@@ -411,20 +420,21 @@ void drawLogo(void) {
   display.display();
 }
 
-void logo_wipe(const uint8_t *bitmap, uint8_t bmp_width, uint8_t bmp_height, bool wipe_in = true, uint16_t delay_ms = 20) {
+void logo_wipe(const uint8_t *bitmap, uint8_t bmp_width, uint8_t bmp_height, bool wipe_in, uint16_t delay_ms) {
   int x = (SCREEN_WIDTH - bmp_width) / 2;
   int y = (SCREEN_HEIGHT - bmp_height) / 2;
 
   display.clearDisplay();
 
   for (int w = 0; w <= bmp_width; w++) {
+    display.drawBitmap(x, y, bitmap, bmp_width, bmp_height, WHITE);
+
     if (wipe_in) {
-      // Draw progressively wider slices of the bitmap
-      display.drawBitmap(x, y, bitmap, w, bmp_height, WHITE);
+      // Mask the right side, revealing only the left w pixels
+      display.fillRect(x + w, y, bmp_width - w, bmp_height, BLACK);
     } else {
-      // Erase by drawing black over the area
-      display.drawBitmap(x, y, bitmap, bmp_width, bmp_height, WHITE); // full image
-      display.fillRect(x, y, w, bmp_height, BLACK); // mask from left
+      // Mask the left side, hiding the left w pixels
+      display.fillRect(x, y, w, bmp_height, BLACK);
     }
 
     display.display();
@@ -503,7 +513,6 @@ void drawCompressorVentIcons() {
 
 void drawDisconnectedScreen() {
   display.clearDisplay();
-  drawBatteryIcon();
 
   // Centered text
   display.setTextSize(2);
@@ -515,7 +524,7 @@ void drawDisconnectedScreen() {
     display.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT - h) / 2);
     display.print("Disconnected");
     // Button hint: right arrow
-    drawButtonHints("", "", "", icon_arrow_right);
+    drawButtonHints({}, {}, {}, icon_arrow_right);
   } else {
     display.getTextBounds("Connecting...", 0, 0, &x, &y, &w, &h);
     display.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT - h) / 2);
@@ -549,7 +558,7 @@ void sendCancelCommand() {
   queueMessage(doc);
 }
 
-void onReceiveData(const uint8_t *mac, const uint8_t *incomingData, int len) {
+void onReceiveData(const esp_now_recv_info_t *esp_now_info, const uint8_t *incomingData, int len) {
   lastPacketReceivedTime = millis(); // update timestamp
 
   StaticJsonDocument<JSON_RECV_SIZE> doc;
@@ -579,7 +588,7 @@ void onReceiveData(const uint8_t *mac, const uint8_t *incomingData, int len) {
   }
 }
 
-void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+void onDataSent(const esp_now_send_info_t *tx_info, esp_now_send_status_t status) {
   Serial.printf("Last Packet Send Status: %s\n", status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
 }
 
@@ -587,11 +596,7 @@ void queueMessage(const JsonDocument& doc) {
   String payload;
   serializeJson(doc, payload);
 
-  QueuedMessage msg = {
-    .payload = payload,
-    .retriesLeft = MAX_RETRIES,
-    .lastSentTime = 0
-  };
+  QueuedMessage msg = { payload, MAX_RETRIES, 0 };
 
   messageQueue.push_back(msg);
   Serial.println("Message queued:");
