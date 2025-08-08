@@ -53,12 +53,36 @@ static const unsigned char PROGMEM icon_vent [] = {
 	0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 
 	0xff, 0xff, 0xf0
 };
+
+// 'connected_20x20', 20x20px
+static const unsigned char PROGMEM icon_connected_20x20 [] = {
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0xff, 0xc0, 0xe0, 
+	0x00, 0x70, 0x00, 0x00, 0x00, 0x1f, 0xff, 0x80, 0x70, 0x00, 0xe0, 0xc0, 0x00, 0x30, 0x0f, 0xff, 
+	0x00, 0x18, 0x01, 0x80, 0x30, 0x00, 0xc0, 0x03, 0xfc, 0x00, 0x06, 0x06, 0x00, 0x00, 0x00, 0x00, 
+	0x00, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+// 'disconnected_20x20', 20x20px
+static const unsigned char PROGMEM icon_disconnected_20x20 [] = {
+	0x03, 0xfc, 0x30, 0x0e, 0x07, 0x70, 0x18, 0x01, 0xe0, 0x30, 0x01, 0xc0, 0x6f, 0xff, 0xe0, 0x58, 
+	0x07, 0xa0, 0xc0, 0x0e, 0x30, 0x9f, 0xff, 0x90, 0xf0, 0x38, 0xf0, 0xc0, 0x70, 0x30, 0x8f, 0xff, 
+	0x10, 0x99, 0xc1, 0x90, 0x93, 0x80, 0x90, 0xc7, 0xfc, 0x30, 0x4e, 0x06, 0x20, 0x7c, 0x00, 0x60, 
+	0x38, 0xf0, 0xc0, 0x78, 0x01, 0x80, 0xee, 0x07, 0x00, 0xc3, 0xfc, 0x00
+};
 #pragma endregion
 
 #pragma region Battery Variables
 #define BATTERY_PIN    2 // A0, GPIO2
 float batteryVoltage = 0.0;
 int batteryPercent = 0;
+
+// Battery smoothing and filtering
+#define BATTERY_SAMPLES 10
+int batteryMvBuffer[BATTERY_SAMPLES] = {0};
+uint8_t batteryMvIndex = 0;
+uint8_t batteryMvCount = 0;
+long batteryMvSum = 0;           // sum of buffer in mV
+int batteryFilteredMv = 0;       // filtered output in mV (battery side)
+const int BATTERY_DEADBAND_MV = 50; // ignore changes smaller than 50 mV at the battery
 #pragma endregion
 
 #pragma region Button Variables
@@ -110,6 +134,7 @@ static const unsigned char PROGMEM icon_cancel [] = {
 // Replace with your control board MAC
 uint8_t controlBoardAddress[] = { 0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF }; // example
 
+unsigned long disconnected_show_connected_until_ms = 0;
 unsigned long lastPacketReceivedTime = 0;
 const unsigned long CONNECTION_TIMEOUT = 5000; // ms
 bool isConnected = false;
@@ -165,7 +190,7 @@ void setup() {
 
   // Clear display and wipe in logo for 2s
   display.clearDisplay();
-  logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, true, 20);
+  logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, true, 10);
   delay(2000);
 }
 
@@ -190,6 +215,18 @@ void setupESPNOW() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
 
+  // Print MAC address of the this board
+  uint8_t baseMac[6];
+  esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, baseMac);
+  if (ret == ESP_OK) {
+    Serial.print(">>> MAC Address: ");
+    Serial.printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
+                  baseMac[0], baseMac[1], baseMac[2],
+                  baseMac[3], baseMac[4], baseMac[5]);
+  } else {
+    Serial.println("Failed to read MAC address");
+  }
+
   if (esp_now_init() != ESP_OK) {
     Serial.println("ESP-NOW init failed");
     return;
@@ -204,6 +241,11 @@ void setupESPNOW() {
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
 
+  Serial.print("Registering peer: ");
+  Serial.printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
+                  controlBoardAddress[0], controlBoardAddress[1],
+                  controlBoardAddress[2], controlBoardAddress[3],
+                  controlBoardAddress[4], controlBoardAddress[5]);
   if (!esp_now_is_peer_exist(controlBoardAddress)) {
     if (esp_now_add_peer(&peerInfo) != ESP_OK) {
       Serial.println("Failed to add peer");
@@ -224,35 +266,50 @@ void loop() {
   updateBatteryStatus();
   Serial.printf("Battery: %.2f V (%d%%)\n", batteryVoltage, batteryPercent);
 
-  // Update State Machine
+  // Update State Machine & handle display updates
   updateConnectionStatus();
   Serial.println("Updated connection status");
+  display.clearDisplay();
   updateStateMachine();
+  display.display();
   Serial.println("Updated state machine");
-
-  // Handle display updates
-  drawBatteryIcon();
-  Serial.println("Drew battery icon");
-  drawConnectionIcon();
-  Serial.println("Drew connection icon");
-  drawButtonHints("Retry", "PSI-", "PSI+", "Start");
-  Serial.println("Drew button hints");
-  drawCompressorVentIcons();
-  Serial.println("Drew compressor/vent icons");
 
   // Process ESP-NOW message queue
   processMessageQueue();
   Serial.println("Processed message queue");
+
+  delay(500);
 }
 
 
 void updateBatteryStatus() {
-  // Read voltage at divider
-  uint32_t mv = analogReadMilliVolts(BATTERY_PIN);
-  batteryVoltage = (float)mv * 2.0 / 1000.0; // Convert to volts
+  // Read voltage at divider (mV at pin)
+  uint32_t mv_pin = analogReadMilliVolts(BATTERY_PIN);
+  int mv_batt = (int)mv_pin * 2; // Convert to battery mV (divider is 1/2)
 
-  // Estimate percentage (simple linear, adjust as needed)
-  batteryPercent = (int)(((batteryVoltage - 3.3) / (4.2 - 3.3)) * 100.0);
+  // Update rolling average buffer
+  if (batteryMvCount < BATTERY_SAMPLES) {
+    batteryMvCount++;
+    batteryMvSum += mv_batt;
+    batteryMvBuffer[batteryMvIndex] = mv_batt;
+    batteryMvIndex = (batteryMvIndex + 1) % BATTERY_SAMPLES;
+  } else {
+    batteryMvSum -= batteryMvBuffer[batteryMvIndex];
+    batteryMvSum += mv_batt;
+    batteryMvBuffer[batteryMvIndex] = mv_batt;
+    batteryMvIndex = (batteryMvIndex + 1) % BATTERY_SAMPLES;
+  }
+
+  int avgMv = (int)(batteryMvSum / (batteryMvCount == 0 ? 1 : batteryMvCount));
+
+  // Deadband filter: only update if outside threshold or on first measurement
+  if (batteryMvCount == 1 || abs(avgMv - batteryFilteredMv) >= BATTERY_DEADBAND_MV) {
+    batteryFilteredMv = avgMv;
+  }
+
+  // Publish filtered voltage and percent
+  batteryVoltage = batteryFilteredMv / 1000.0f; // volts
+  batteryPercent = (int)(((batteryVoltage - 3.3f) / (4.2f - 3.3f)) * 100.0f);
   if (batteryPercent > 100) batteryPercent = 100;
   if (batteryPercent < 0) batteryPercent = 0;
 }
@@ -300,16 +357,18 @@ void updateButtons() {
 }
 
 void goToDeepSleep() {
-  Serial.println("Entering deep sleep...");
+  // Serial.println("Entering light sleep...");
 
-  sleepSequenceStarted = true;
-  drawLogo();
-  delay(1000);
-  logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false, 20);
+  // sleepSequenceStarted = true;
+  // drawLogo();
+  // delay(1000);
+  // logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false, 10);
   
-  // GPIO10 = ext0 wake source (must be RTC_GPIO capable)
-  esp_deep_sleep_enable_gpio_wakeup(BIT(BTN_LEFT_PIN), ESP_GPIO_WAKEUP_GPIO_LOW);
-  esp_deep_sleep_start();
+  WiFi.disconnect();
+  WiFi.mode(WIFI_OFF);
+  // gpio_wakeup_enable(GPIO_NUM_10, GPIO_INTR_LOW_LEVEL);
+  // esp_sleep_enable_gpio_wakeup();
+  // esp_light_sleep_start();
 }
 #pragma endregion
 
@@ -336,11 +395,13 @@ void updateStateMachine() {
   switch (currentState) {
     case BOOT:
       // Wipe out logo before transitioning
-      logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false, 20);
+      logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false, 10);
       enterState(DISCONNECTED);
       break;
 
     case DISCONNECTED:
+      enterState(IDLE); // TODO: Remove after testing is complete
+
       // Wait for user to press retry button (BTN_RIGHT) to reconnect
       if (btnRightPressed) {
         Serial.println("User requested reconnect.");
@@ -354,44 +415,65 @@ void updateStateMachine() {
         // Transition to IDLE if connected
         if (isConnected) {
           Serial.println("Reconnected successfully.");
-          enterState(IDLE);
-          break;
         }
       }
 
+      // If connection comes up while in DISCONNECTED, start a 1s hold to show the connected icon
+      if (isConnected) {
+        if (disconnected_show_connected_until_ms == 0) {
+          disconnected_show_connected_until_ms = millis() + 1000; // 1 second
+        }
+        // After 1s of showing the connected icon, transition to IDLE
+        if (millis() >= disconnected_show_connected_until_ms) {
+          disconnected_show_connected_until_ms = 0;
+          enterState(IDLE);
+          break;
+        }
+      } else {
+        // If connection is not up, ensure the timer is cleared
+        disconnected_show_connected_until_ms = 0;
+      }
+
+      // Draw display
       drawDisconnectedScreen();
+      Serial.println("Drew Disconnected screen");
       break;
 
     case IDLE:
-      // Allow user to set PSI and send command
+      // Adjust target PSI
       if (btnUpPressed) {
         targetPSI += 1.0;
-        if (targetPSI > 50.0) targetPSI = 50.0; // Max PSI
+        if (targetPSI > 45.0) targetPSI = 45.0; // Max PSI
       }
       if (btnDownPressed) {
         targetPSI -= 1.0;
-        if (targetPSI < 5.0) targetPSI = 5.0; // Min PSI
+        if (targetPSI < 20.0) targetPSI = 20.0; // Min PSI
       }
       if (btnRightPressed) {
         // Start air-up/air-down process
         sendStartCommand(targetPSI);
         enterState(SEEKING);
       }
+      
       // If connection is lost, go back to DISCONNECTED
       if (!isConnected) {
-        enterState(DISCONNECTED);
+        // enterState(DISCONNECTED); // TODO: Re-enable after testing
       }
+
+      // Draw IDLE screen
+      drawIdleScreen();
       break;
 
     case SEEKING:
       // Cancelable by user (BTN_RIGHT)
       if (btnRightPressed) {
         sendCancelCommand();
-        enterState(IDLE);
+        // enterState(IDLE); // Do not transition immediately, wait for response
       }
+
       // If complete or error received, go to IDLE or ERROR
       if (!isConnected) {
-        enterState(DISCONNECTED);
+        // enterState(DISCONNECTED); // TODO: Re-enable after testing
       } else if (strcmp(lastStatus, "done") == 0) {
         enterState(IDLE);
       } else if (strcmp(lastStatus, "error") == 0) {
@@ -404,7 +486,7 @@ void updateStateMachine() {
       if (btnRightPressed) {
         enterState(IDLE); // User acknowledges error
       }
-      if (millis() - stateEntryTime > 3000) { // auto-clear after 3s
+      if (millis() - stateEntryTime > 5000) { // auto-clear after 3s
         enterState(IDLE);
       }
       break;
@@ -456,9 +538,11 @@ void drawBatteryIcon() {
   if (batteryPercent < 15) {
     display.setTextSize(1);
     display.setTextColor(WHITE);
-    display.setCursor(batteryX + batteryW + 5, batteryY);
+    display.setCursor(batteryX + batteryW + 5, batteryY + 2);
     display.print("!"); // exclamation mark
   }
+
+  Serial.println("Drew battery icon");
 }
 
 void drawConnectionIcon() {
@@ -473,6 +557,8 @@ void drawConnectionIcon() {
 
   if (!isConnected) 
     display.drawLine(connX - 8, connY, connX + 8, connY + 14, WHITE); // diagonal slash
+
+  Serial.println("Drew connection icon");
 }
 
 void drawButtonHints(const char* left, const char* down, const char* up, const char* right) {
@@ -493,11 +579,10 @@ void drawButtonHints(const char* left, const char* down, const char* up, const c
 void drawButtonHints(const uint8_t *left, const uint8_t *down, const uint8_t *up, const uint8_t *right) {
   int iconW = 32;
   int iconY = 6;
-  
-  display.drawBitmap(2, SCREEN_HEIGHT - iconY, left, 6, 6, WHITE);
-  display.drawBitmap(34, SCREEN_HEIGHT - iconY, up, 6, 6, WHITE);
-  display.drawBitmap(66, SCREEN_HEIGHT - iconY, down, 6, 6, WHITE);
-  display.drawBitmap(98, SCREEN_HEIGHT - iconY, right, 6, 6, WHITE);
+  if (left)  display.drawBitmap(2, SCREEN_HEIGHT - iconY, left, 6, 6, WHITE);
+  if (up)    display.drawBitmap(34, SCREEN_HEIGHT - iconY, up, 6, 6, WHITE);
+  if (down)  display.drawBitmap(66, SCREEN_HEIGHT - iconY, down, 6, 6, WHITE);
+  if (right) display.drawBitmap(98, SCREEN_HEIGHT - iconY, right, 6, 6, WHITE);
 }
 
 void drawCompressorVentIcons() {
@@ -512,26 +597,79 @@ void drawCompressorVentIcons() {
 }
 
 void drawDisconnectedScreen() {
-  display.clearDisplay();
+  drawBatteryIcon();
+  
+  // Centered 20x20 icon
+  const uint8_t* bmp = icon_disconnected_20x20;
+  const uint8_t w = 20;
+  const uint8_t h = 20;
+  const int16_t x = (128 - w) / 2;
+  const int16_t y = (32 - h) / 2;
 
-  // Centered text
-  display.setTextSize(2);
-  display.setTextColor(WHITE);
-  int16_t x, y;
-  uint16_t w, h;
-  if (!isConnected) {
-    display.getTextBounds("Disconnected", 0, 0, &x, &y, &w, &h);
-    display.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT - h) / 2);
-    display.print("Disconnected");
-    // Button hint: right arrow
-    drawButtonHints({}, {}, {}, icon_arrow_right);
-  } else {
-    display.getTextBounds("Connecting...", 0, 0, &x, &y, &w, &h);
-    display.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT - h) / 2);
-    display.print("Connecting...");
-    drawButtonHints("", "", "", "");
+  // If we're within the post-connect grace period, show the connected icon instead
+  if (isConnected && disconnected_show_connected_until_ms != 0 && millis() < disconnected_show_connected_until_ms) {
+    bmp = icon_connected_20x20;
   }
-  display.display();
+
+  display.drawBitmap(x, y, bmp, w, h, SSD1306_WHITE);
+
+  if (!isConnected) {
+    // Button hint: right arrow
+    drawButtonHints("", "", "", "Retry");
+  }
+}
+
+void drawIdleScreen() {
+  // Top status
+  drawBatteryIcon();
+  drawConnectionIcon();
+
+  // Prepare strings
+  String currentStr = String((int)latestPSI);
+  String targetStr  = String((int)targetPSI);
+
+  // Text settings
+  display.setTextColor(WHITE);
+  display.setTextSize(2);
+
+  // Measure text bounds (uses current text size)
+  int16_t bx, by; uint16_t bw, bh;
+  display.getTextBounds(currentStr, 0, 0, &bx, &by, &bw, &bh);
+  uint16_t curW = bw, curH = bh;
+  display.getTextBounds(targetStr, 0, 0, &bx, &by, &bw, &bh);
+  uint16_t tgtW = bw, tgtH = bh;
+
+  // Layout regions
+  int leftX0 = 0, leftX1 = (SCREEN_WIDTH / 2) - 8;   // leave space near center for arrow
+  int rightX0 = (SCREEN_WIDTH / 2) + 8, rightX1 = SCREEN_WIDTH;
+  int centerY = (SCREEN_HEIGHT - 16) / 2; // for size 2 text (approx 16px height)
+  if (centerY < 0) centerY = 0;
+
+  // Center-left current PSI
+  int curX = leftX0 + (leftX1 - leftX0 - (int)curW) / 2;
+  if (curX < 0) curX = 0;
+  display.setCursor(curX, centerY);
+  display.print(currentStr);
+
+  // Center-right target PSI
+  int tgtX = rightX0 + (rightX1 - rightX0 - (int)tgtW) / 2;
+  if (tgtX < rightX0) tgtX = rightX0;
+  display.setCursor(tgtX, centerY);
+  display.print(targetStr);
+
+  // Underline target PSI
+  int underlineY = centerY + (int)tgtH + 1;
+  if (underlineY < SCREEN_HEIGHT) {
+    display.drawLine(tgtX, underlineY, tgtX + (int)tgtW, underlineY, WHITE);
+  }
+
+  // Separator arrow pointing right (center of screen)
+  int ax = (SCREEN_WIDTH / 2) - 5;
+  int ay = SCREEN_HEIGHT / 2;
+  display.fillTriangle(ax, ay - 5, ax, ay + 5, ax + 9, ay, WHITE);
+
+  // Button hints: Left = none, Down = raise (up arrow), Up = lower (down arrow), Right = start
+  drawButtonHints(nullptr, icon_arrow_up, icon_arrow_down, icon_arrow_right);
 }
 #pragma endregion
 
