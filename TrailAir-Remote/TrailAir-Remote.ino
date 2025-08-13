@@ -3,10 +3,11 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-#include <ezButton.h>
+#include <SmartButton.h>
 #include <esp_sleep.h>
 
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <esp_now.h>
 #include <deque>
 #include <ArduinoJson.h>
@@ -39,21 +40,6 @@ static const unsigned char PROGMEM logo_bmp [] = {
 	0xe0, 0xff, 0xe3, 0xff, 0xff, 0xe0, 0xff, 0xe3, 0xff, 0xff, 0xe0, 0xff, 0xe3, 0xff, 0xff, 0xe0
 };
 
-// 'compressor', 20x17px
-static const unsigned char PROGMEM icon_compressor [] = {
-	0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 
-	0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 
-	0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 
-	0xff, 0xff, 0xf0
-};
-// 'vent', 20x17px
-static const unsigned char PROGMEM icon_vent [] = {
-	0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 
-	0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 
-	0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 0xff, 0xff, 0xf0, 
-	0xff, 0xff, 0xf0
-};
-
 // 'connected_20x20', 20x20px
 static const unsigned char PROGMEM icon_connected_20x20 [] = {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0xff, 0xc0, 0xe0, 
@@ -61,12 +47,22 @@ static const unsigned char PROGMEM icon_connected_20x20 [] = {
 	0x00, 0x18, 0x01, 0x80, 0x30, 0x00, 0xc0, 0x03, 0xfc, 0x00, 0x06, 0x06, 0x00, 0x00, 0x00, 0x00, 
 	0x00, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
+
 // 'disconnected_20x20', 20x20px
 static const unsigned char PROGMEM icon_disconnected_20x20 [] = {
 	0x03, 0xfc, 0x30, 0x0e, 0x07, 0x70, 0x18, 0x01, 0xe0, 0x30, 0x01, 0xc0, 0x6f, 0xff, 0xe0, 0x58, 
 	0x07, 0xa0, 0xc0, 0x0e, 0x30, 0x9f, 0xff, 0x90, 0xf0, 0x38, 0xf0, 0xc0, 0x70, 0x30, 0x8f, 0xff, 
 	0x10, 0x99, 0xc1, 0x90, 0x93, 0x80, 0x90, 0xc7, 0xfc, 0x30, 0x4e, 0x06, 0x20, 0x7c, 0x00, 0x60, 
 	0x38, 0xf0, 0xc0, 0x78, 0x01, 0x80, 0xee, 0x07, 0x00, 0xc3, 0xfc, 0x00
+};
+
+// 'connected_8x6', 8x6px
+static const unsigned char PROGMEM icon_connected_8x6 [] = {
+	0x3c, 0x42, 0x81, 0x3c, 0x42, 0x18
+};
+// 'disconnected_8x6', 8x6px
+static const unsigned char PROGMEM icon_disconnected_8x6 [] = {
+	0xc3, 0x66, 0x3c, 0x3c, 0x66, 0xc3
 };
 #pragma endregion
 
@@ -92,41 +88,54 @@ const int BATTERY_DEADBAND_MV = 50; // ignore changes smaller than 50 mV at the 
 #define BTN_UP_PIN     8
 #define BTN_RIGHT_PIN  20
 
-// Setup ezButton objects
-ezButton btnLeft(BTN_LEFT_PIN, INPUT_PULLUP);
-ezButton btnDown(BTN_DOWN_PIN, INPUT_PULLUP);
-ezButton btnUp(BTN_UP_PIN, INPUT_PULLUP);
-ezButton btnRight(BTN_RIGHT_PIN, INPUT_PULLUP);
+// SmartButton objects (active-low with pull-ups)
+using namespace smartbutton;
+SmartButton btnLeft(BTN_LEFT_PIN);
+SmartButton btnDown(BTN_DOWN_PIN);
+SmartButton btnUp(BTN_UP_PIN);
+SmartButton btnRight(BTN_RIGHT_PIN);
 
-// Track button presses for use in state logic
-bool btnLeftPressed = false;
-bool btnDownPressed = false;
-bool btnUpPressed = false;
-bool btnRightPressed = false;
+// event handlers
+void leftEventCallback(SmartButton *button, SmartButton::Event event, int clickCounter);
+void downEventCallback(SmartButton *button, SmartButton::Event event, int clickCounter);
+void upEventCallback(SmartButton *button, SmartButton::Event event, int clickCounter);
+void rightEventCallback(SmartButton *button, SmartButton::Event event, int clickCounter);
 
 const unsigned long SLEEP_TIMEOUT = 60000; // ms
 unsigned long lastButtonPressedTime = 0;
 
 // Manual sleep logic variables
-unsigned long leftPressStart = 0;
 bool sleepSequenceStarted = false;
 
 // Icons for button hints
 // 'arrow_down', 6x6px
-static const unsigned char PROGMEM icon_arrow_down [] = {
+static const unsigned char PROGMEM icon_arrow_down_6x6 [] = {
 	0x30, 0x30, 0x30, 0xfc, 0x78, 0x30
 };
+
 // 'arrow_right', 6x6px
-static const unsigned char PROGMEM icon_arrow_right [] = {
+static const unsigned char PROGMEM icon_arrow_right_6x6 [] = {
 	0x10, 0x18, 0xfc, 0xfc, 0x18, 0x10
 };
+
 // 'arrow_up', 6x6px
-static const unsigned char PROGMEM icon_arrow_up [] = {
+static const unsigned char PROGMEM icon_arrow_up_6x6 [] = {
 	0x30, 0x78, 0xfc, 0x30, 0x30, 0x30
 };
+
 // 'cancel', 6x6px
-static const unsigned char PROGMEM icon_cancel [] = {
+static const unsigned char PROGMEM icon_cancel_6x6 [] = {
 	0x84, 0x48, 0x30, 0x30, 0x48, 0x84
+};
+
+// 'dash_6x6', 6x6px
+static const unsigned char PROGMEM icon_dash_6x6 [] = {
+	0x00, 0x00, 0xfc, 0xfc, 0x00, 0x00
+};
+
+// 'plus_6x6', 6x6px
+static const unsigned char PROGMEM icon_plus_6x6 [] = {
+	0x30, 0x30, 0xfc, 0xfc, 0x30, 0x30
 };
 #pragma endregion 
 
@@ -134,13 +143,16 @@ static const unsigned char PROGMEM icon_cancel [] = {
 // Replace with your control board MAC
 uint8_t controlBoardAddress[] = { 0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF }; // example
 
+// Hold timer to show "Done!" for 2s in SEEKING state before transitioning
+unsigned long seeking_done_until_ms = 0;
 unsigned long disconnected_show_connected_until_ms = 0;
+
 unsigned long lastPacketReceivedTime = 0;
 const unsigned long CONNECTION_TIMEOUT = 5000; // ms
 bool isConnected = false;
 float latestPSI = 0.0;
 char lastStatus[32] = "Disconnected";
-bool isCompressorOn = false;
+bool isCompressorOn = true;
 bool isVentOpen = false;
 
 // Structure for outbound command
@@ -181,6 +193,8 @@ RemoteState previousState = BOOT;
 unsigned long stateEntryTime = 0;
 #pragma endregion
 
+
+#pragma region Setups
 void setup() {
   Serial.begin(115200);
 
@@ -188,10 +202,9 @@ void setup() {
   setupButtons();
   setupESPNOW();
 
-  // Clear display and wipe in logo for 2s
-  display.clearDisplay();
-  logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, true, 10);
-  delay(2000);
+  delay(500);
+  // Wipe out logo before beginning loop
+  logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false, 10);
 }
 
 void setupScreen() {
@@ -201,14 +214,36 @@ void setupScreen() {
     for(;;); // Don't proceed, loop forever
   }
 
-  drawLogo();    // Draw the logo
+  // Clear display and wipe in logo for 2s
+  display.clearDisplay();
+  logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, true, 10);
 }
 
 void setupButtons() {
-  btnLeft.setDebounceTime(50);
-  btnDown.setDebounceTime(50);
-  btnUp.setDebounceTime(50);
-  btnRight.setDebounceTime(50);
+  pinMode(BTN_LEFT_PIN, INPUT_PULLUP); // external pullup
+  pinMode(BTN_DOWN_PIN, INPUT_PULLUP); // pullup resistor on-board
+  pinMode(BTN_UP_PIN, INPUT_PULLUP); // external pullup
+  pinMode(BTN_RIGHT_PIN, INPUT_PULLUP); // external pullup
+
+  // The SmartButton library required changes to SmartButtonDefs.h and SmartButton.cpp
+  // to compile. The changes are:
+  // SmartButtonDefs.h: 
+  //    16    constexpr int (*getGpioState)(uint8_t) = digitalRead;
+  // SmartButton.cpp:
+  //    114   s = getGpioState(this->pin) == HIGH;
+  btnLeft.begin(leftEventCallback);
+  btnDown.begin(downEventCallback);
+  btnUp.begin(upEventCallback);
+  btnRight.begin(rightEventCallback);
+
+  gpio_wakeup_enable(GPIO_NUM_10, GPIO_INTR_LOW_LEVEL);
+  esp_err_t result = esp_sleep_enable_gpio_wakeup();
+
+  if (result == ESP_OK) {
+      Serial.println("GPIO Wake-Up set successfully.");
+  } else {
+      Serial.println("Failed to set GPIO Wake-Up as wake-up source.");
+  }
 }
 
 void setupESPNOW() {
@@ -246,39 +281,50 @@ void setupESPNOW() {
                   controlBoardAddress[0], controlBoardAddress[1],
                   controlBoardAddress[2], controlBoardAddress[3],
                   controlBoardAddress[4], controlBoardAddress[5]);
+
+  // Check if peer already exists in ESP-NOW registry
   if (!esp_now_is_peer_exist(controlBoardAddress)) {
     if (esp_now_add_peer(&peerInfo) != ESP_OK) {
       Serial.println("Failed to add peer");
-      return;
+      enterState(DISCONNECTED);
+    } else {
+      Serial.println("Peer added successfully");
+      enterState(IDLE);
     }
   }
 
   Serial.println("ESP-NOW initialized");
 }
+#pragma endregion
 
 
 void loop() {  
   // Read buttons
-  updateButtons();
-  Serial.println("Read button states");
+  SmartButton::service();
+  if (millis() - lastButtonPressedTime > SLEEP_TIMEOUT) {
+    Serial.println("Sleep timeout exceeded.");
+    goToSleep();
+  }
 
   // Check battery voltage
   updateBatteryStatus();
   Serial.printf("Battery: %.2f V (%d%%)\n", batteryVoltage, batteryPercent);
 
   // Update State Machine & handle display updates
+  currentState = IDLE; // For testing purposes
+  Serial.print("Current state: ");
+  Serial.println(currentState);
   updateConnectionStatus();
-  Serial.println("Updated connection status");
+
   display.clearDisplay();
   updateStateMachine();
   display.display();
-  Serial.println("Updated state machine");
 
   // Process ESP-NOW message queue
-  processMessageQueue();
-  Serial.println("Processed message queue");
+  // processMessageQueue();
+  // Serial.println("Processed message queue");
 
-  delay(500);
+  delay(10);
 }
 
 
@@ -316,59 +362,113 @@ void updateBatteryStatus() {
 
 
 #pragma region Button Functions
-void updateButtons() {
-  btnLeft.loop();
-  btnDown.loop();
-  btnUp.loop();
-  btnRight.loop();
+void leftEventCallback(SmartButton *button, SmartButton::Event event, int clickCounter) {
+  lastButtonPressedTime = millis();
 
-  btnLeftPressed  = btnLeft.isPressed();
-  btnDownPressed  = btnDown.isPressed();
-  btnUpPressed    = btnUp.isPressed();
-  btnRightPressed = btnRight.isPressed();
+  if (event == SmartButton::Event::LONG_HOLD) {
+    Serial.println("Left button long-pressed, going to sleep...");
+    goToSleep();
+  }
 
-  // Manual sleep logic
-  if (btnLeftPressed) {
-    // Mark the beginning of when the left button was pressed
-    if (leftPressStart == 0) 
-      leftPressStart = millis();
+  if (event == SmartButton::Event::CLICK) {
+    Serial.println("Left button pressed");
 
-    // Start sleep sequence if held for 5 seconds
-    if (!sleepSequenceStarted && (millis() - leftPressStart >= 5000)) {
-      Serial.println("Manual sleep initiated.");
-      goToDeepSleep();
+    switch (currentState) {
+      case BOOT:
+      case DISCONNECTED:
+      case IDLE:
+      case SEEKING:
+      case ERROR:
+        break;
     }
-  } else {
-    leftPressStart = 0;
-    sleepSequenceStarted = false;
   }
-
-  if (btnLeftPressed || btnRightPressed || btnUpPressed || btnDownPressed) {
-    // reset sleep timer
-    lastButtonPressedTime = millis();
-  }
-
-  if (millis() - lastButtonPressedTime > SLEEP_TIMEOUT) {
-    Serial.println("Sleep timeout exceeded.");
-    goToDeepSleep();
-  }
-
-  // TODO: long press on left button puts the remote to sleep
 }
 
-void goToDeepSleep() {
-  // Serial.println("Entering light sleep...");
+void downEventCallback(SmartButton *button, SmartButton::Event event, int clickCounter) {
+  lastButtonPressedTime = millis();
 
-  // sleepSequenceStarted = true;
-  // drawLogo();
-  // delay(1000);
-  // logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false, 10);
+  if (event == SmartButton::Event::CLICK) {
+    Serial.println("Down button pressed");
+
+    switch (currentState) {
+      case IDLE:
+        targetPSI -= 1.0;
+        if (targetPSI < 20.0) targetPSI = 20.0; // Min PSI
+        break;
+    }
+  }
+}
+
+void upEventCallback(SmartButton *button, SmartButton::Event event, int clickCounter) {
+  lastButtonPressedTime = millis();
+  
+  if (event == SmartButton::Event::CLICK) {
+    Serial.println("Up button pressed");
+
+    switch (currentState) {
+      case IDLE:
+        targetPSI += 1.0;
+        if (targetPSI > 45.0) targetPSI = 45.0; // Max PSI
+        break;
+    }
+  }
+}
+
+void rightEventCallback(SmartButton *button, SmartButton::Event event, int clickCounter) {
+  lastButtonPressedTime = millis();
+  
+  if (event == SmartButton::Event::CLICK) {
+    Serial.println("Right button pressed");
+
+    switch (currentState) {
+      case IDLE:
+        // Send start command with current target PSI
+        Serial.printf("Sending start command with target PSI: %.1f\n", targetPSI);
+        sendStartCommand(targetPSI);
+        break;
+
+      case SEEKING:
+        // Send cancel command
+        sendCancelCommand();
+        break;
+
+      case DISCONNECTED:
+        Serial.println("User requested reconnect.");
+
+        // Retry connection logic
+        if (!isConnected) {
+          Serial.println("Retrying connection...");
+          setupESPNOW();
+        }
+
+        // Transition to IDLE if connected
+        if (isConnected) {
+          Serial.println("Reconnected successfully.");
+        }
+        break;
+
+      case ERROR:
+        enterState(IDLE); // User acknowledges error
+        break;
+    }
+  }
+}
+
+void goToSleep() {
+  Serial.println("Entering light sleep...");
+
+  sleepSequenceStarted = true;
+  drawLogo();
+  delay(1000);
+  logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false, 10);
   
   WiFi.disconnect();
   WiFi.mode(WIFI_OFF);
-  // gpio_wakeup_enable(GPIO_NUM_10, GPIO_INTR_LOW_LEVEL);
-  // esp_sleep_enable_gpio_wakeup();
-  // esp_light_sleep_start();
+  esp_wifi_stop();
+  esp_light_sleep_start();
+
+  Serial.println("Woke up from sleep.");
+  enterState(DISCONNECTED);
 }
 #pragma endregion
 
@@ -400,23 +500,10 @@ void updateStateMachine() {
       break;
 
     case DISCONNECTED:
-      enterState(IDLE); // TODO: Remove after testing is complete
-
-      // Wait for user to press retry button (BTN_RIGHT) to reconnect
-      if (btnRightPressed) {
-        Serial.println("User requested reconnect.");
-
-        // Retry connection logic
-        if (!isConnected) {
-          Serial.println("Retrying connection...");
-          setupESPNOW();
-        }
-
-        // Transition to IDLE if connected
-        if (isConnected) {
-          Serial.println("Reconnected successfully.");
-        }
-      }
+    {
+      // Draw display
+      drawDisconnectedScreen();
+      Serial.println("Drew Disconnected screen");
 
       // If connection comes up while in DISCONNECTED, start a 1s hold to show the connected icon
       if (isConnected) {
@@ -433,59 +520,50 @@ void updateStateMachine() {
         // If connection is not up, ensure the timer is cleared
         disconnected_show_connected_until_ms = 0;
       }
-
-      // Draw display
-      drawDisconnectedScreen();
-      Serial.println("Drew Disconnected screen");
       break;
+    }
 
     case IDLE:
-      // Adjust target PSI
-      if (btnUpPressed) {
-        targetPSI += 1.0;
-        if (targetPSI > 45.0) targetPSI = 45.0; // Max PSI
-      }
-      if (btnDownPressed) {
-        targetPSI -= 1.0;
-        if (targetPSI < 20.0) targetPSI = 20.0; // Min PSI
-      }
-      if (btnRightPressed) {
-        // Start air-up/air-down process
-        sendStartCommand(targetPSI);
-        enterState(SEEKING);
-      }
+    {
+      // Draw IDLE screen
+      drawIdleScreen();
       
       // If connection is lost, go back to DISCONNECTED
       if (!isConnected) {
         // enterState(DISCONNECTED); // TODO: Re-enable after testing
       }
 
-      // Draw IDLE screen
-      drawIdleScreen();
       break;
+    }
 
     case SEEKING:
-      // Cancelable by user (BTN_RIGHT)
-      if (btnRightPressed) {
-        sendCancelCommand();
-        // enterState(IDLE); // Do not transition immediately, wait for response
+      // Draw SEEKING screen
+      drawSeekingScreen();
+      Serial.println("Drew Seeking screen");
+      
+      // Start or maintain the 2-second Done! hold if status is done
+      if (strcmp(lastStatus, "done") == 0 && seeking_done_until_ms == 0) {
+        seeking_done_until_ms = millis() + 2000;
       }
 
-      // If complete or error received, go to IDLE or ERROR
+      // If complete or error received, go to IDLE or ERROR after hold
       if (!isConnected) {
-        // enterState(DISCONNECTED); // TODO: Re-enable after testing
-      } else if (strcmp(lastStatus, "done") == 0) {
-        enterState(IDLE);
+        // enterState(DISCONNECTED); // optional per testing
       } else if (strcmp(lastStatus, "error") == 0) {
         enterState(ERROR);
+      } else if (seeking_done_until_ms != 0 && millis() >= seeking_done_until_ms) {
+        seeking_done_until_ms = 0;
+        enterState(IDLE);
+        break;
       }
+
       break;
 
     case ERROR:
       // Display error, wait for user action or timeout to return to IDLE
-      if (btnRightPressed) {
-        enterState(IDLE); // User acknowledges error
-      }
+      // drawErrorScreen();
+      Serial.println("Drew Error screen");
+      
       if (millis() - stateEntryTime > 5000) { // auto-clear after 3s
         enterState(IDLE);
       }
@@ -528,37 +606,30 @@ void drawBatteryIcon() {
   // Battery icon (top left)
   int batteryX = 0;
   int batteryY = 0;
-  int batteryW = 20;
-  int batteryH = 10;
-  int fillW = (int)((batteryPercent / 100.0) * (batteryW - 4));
+  int batteryW = 12;
+  int batteryH = 6;
+  int fillW = (int)((batteryPercent / 100.0) * (batteryW - 2));
   display.drawRect(batteryX, batteryY, batteryW, batteryH, WHITE); // battery outline
-  display.drawRect(batteryX + batteryW, batteryY + 3, 2, 4, WHITE); // battery nub
-  display.fillRect(batteryX + 2, batteryY + 2, fillW, batteryH - 4, WHITE); // battery fill
+  display.drawRect(batteryX + batteryW, batteryY + 2, 1, 2, WHITE); // battery nub
+  display.fillRect(batteryX + 1, batteryY + 1, fillW, batteryH - 2, WHITE); // battery fill
 
   if (batteryPercent < 15) {
     display.setTextSize(1);
     display.setTextColor(WHITE);
-    display.setCursor(batteryX + batteryW + 5, batteryY + 2);
+    display.setCursor(batteryX + batteryW + 2, batteryY);
     display.print("!"); // exclamation mark
   }
-
-  Serial.println("Drew battery icon");
 }
 
 void drawConnectionIcon() {
   // Connection icon (top right)
-  int connX = SCREEN_WIDTH - 16;
-  int connY = 2;
-
-  // Airwave cone (3 arcs)
-  display.drawPixel(connX, connY + 7, WHITE);
-  display.drawCircle(connX, connY + 7, 3, WHITE);
-  display.drawCircle(connX, connY + 7, 6, WHITE);
+  int connX = SCREEN_WIDTH - 8;
+  int connY = 1;
 
   if (!isConnected) 
-    display.drawLine(connX - 8, connY, connX + 8, connY + 14, WHITE); // diagonal slash
-
-  Serial.println("Drew connection icon");
+    display.drawBitmap(connX, connY, icon_disconnected_8x6, 8, 6, WHITE); 
+  else
+    display.drawBitmap(connX, connY, icon_connected_8x6, 8, 6, WHITE); 
 }
 
 void drawButtonHints(const char* left, const char* down, const char* up, const char* right) {
@@ -578,22 +649,14 @@ void drawButtonHints(const char* left, const char* down, const char* up, const c
 
 void drawButtonHints(const uint8_t *left, const uint8_t *down, const uint8_t *up, const uint8_t *right) {
   int iconW = 32;
-  int iconY = 6;
-  if (left)  display.drawBitmap(2, SCREEN_HEIGHT - iconY, left, 6, 6, WHITE);
-  if (up)    display.drawBitmap(34, SCREEN_HEIGHT - iconY, up, 6, 6, WHITE);
-  if (down)  display.drawBitmap(66, SCREEN_HEIGHT - iconY, down, 6, 6, WHITE);
-  if (right) display.drawBitmap(98, SCREEN_HEIGHT - iconY, right, 6, 6, WHITE);
-}
+  int iconY = SCREEN_HEIGHT - 6;
+  int offset =  + (iconW - 6) / 2;
 
-void drawCompressorVentIcons() {
-  int centerX = (SCREEN_WIDTH - 44) / 2;
-  int centerY = (SCREEN_HEIGHT - 17) / 2;
-  if (isCompressorOn) {
-    display.drawBitmap(centerX, centerY, icon_compressor, 20, 17, WHITE);
-  }
-  if (isVentOpen) {
-    display.drawBitmap(centerX + 24, centerY, icon_vent, 20, 17, WHITE);
-  }
+  // TODO: center the icons better
+  if (left)  display.drawBitmap(0  + offset, iconY, left, 6, 6, WHITE);
+  if (up)    display.drawBitmap(32 + offset, iconY, up, 6, 6, WHITE);
+  if (down)  display.drawBitmap(64 + offset, iconY, down, 6, 6, WHITE);
+  if (right) display.drawBitmap(96 + offset, iconY, right, 6, 6, WHITE);
 }
 
 void drawDisconnectedScreen() {
@@ -623,6 +686,9 @@ void drawIdleScreen() {
   // Top status
   drawBatteryIcon();
   drawConnectionIcon();
+
+  // Button hints: Left = none, Down = raise (up arrow), Up = lower (down arrow), Right = start
+  drawButtonHints(nullptr, icon_plus_6x6, icon_dash_6x6, icon_arrow_right_6x6); // TODO: draw a dash for left button hint
 
   // Prepare strings
   String currentStr = String((int)latestPSI);
@@ -658,7 +724,7 @@ void drawIdleScreen() {
   display.print(targetStr);
 
   // Underline target PSI
-  int underlineY = centerY + (int)tgtH + 1;
+  int underlineY = centerY + (int)tgtH;
   if (underlineY < SCREEN_HEIGHT) {
     display.drawLine(tgtX, underlineY, tgtX + (int)tgtW, underlineY, WHITE);
   }
@@ -667,9 +733,68 @@ void drawIdleScreen() {
   int ax = (SCREEN_WIDTH / 2) - 5;
   int ay = SCREEN_HEIGHT / 2;
   display.fillTriangle(ax, ay - 5, ax, ay + 5, ax + 9, ay, WHITE);
+}
 
-  // Button hints: Left = none, Down = raise (up arrow), Up = lower (down arrow), Right = start
-  drawButtonHints(nullptr, icon_arrow_up, icon_arrow_down, icon_arrow_right);
+void drawSeekingScreen() {
+  // Top status
+  drawBatteryIcon();
+  drawConnectionIcon();
+
+  // Button hints: Right = Cancel
+  drawButtonHints(nullptr, nullptr, nullptr, icon_cancel_6x6);
+
+  // If we're showing the Done! hold message, center it big and return
+  if (seeking_done_until_ms != 0) {
+    const char* doneTxt = "Done!";
+    display.setTextColor(WHITE);
+    display.setTextSize(2);
+    int16_t bx, by; uint16_t bw, bh;
+    display.getTextBounds(doneTxt, 0, 0, &bx, &by, &bw, &bh);
+    int x = (SCREEN_WIDTH - (int)bw) / 2;
+    int y = (SCREEN_HEIGHT - (int)bh) / 2;
+    if (y < 8) y = 8; // keep clear of status icons
+    display.setCursor(x, y);
+    display.print(doneTxt);
+    return;
+  }
+
+  // Determine verb text
+  const char* verb = nullptr;
+  if (isCompressorOn) {
+    verb = "Inflating...";
+  } else if (isVentOpen) {
+    verb = "Deflating...";
+  } else {
+    verb = "Checking...";
+  }
+
+  // Build PSI string
+  String psiStr = String((int)latestPSI) + " PSI";
+
+  // Measure bounds for centered layout
+  int16_t bx, by; uint16_t bw1, bh1, bw2, bh2;
+  display.setTextColor(WHITE);
+  display.setTextSize(1);
+  display.getTextBounds(verb, 0, 0, &bx, &by, &bw1, &bh1);
+  display.setTextSize(2);
+  display.getTextBounds(psiStr, 0, 0, &bx, &by, &bw2, &bh2);
+
+  int totalH = (int)bh1 + 2 + (int)bh2;
+  int yStart = (SCREEN_HEIGHT - totalH) / 2;
+  if (yStart < 8) yStart = 8; // avoid top icons
+
+  // Draw verb (size 1) centered
+  int xVerb = (SCREEN_WIDTH - (int)bw1) / 2;
+  display.setTextSize(1);
+  display.setCursor(xVerb, yStart);
+  display.print(verb);
+
+  // Draw PSI (size 2) centered below
+  int xPSI = (SCREEN_WIDTH - (int)bw2) / 2;
+  int yPSI = yStart + (int)bh1 + 2;
+  display.setTextSize(2);
+  display.setCursor(xPSI, yPSI);
+  display.print(psiStr);
 }
 #pragma endregion
 
