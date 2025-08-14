@@ -9,8 +9,9 @@
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include <esp_now.h>
-#include <deque>
-#include <ArduinoJson.h>
+#include <math.h>  // for roundf
+
+#define DEBUG_SEND 1
 
 #pragma region Screen Variables
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
@@ -137,67 +138,92 @@ static const unsigned char PROGMEM icon_dash_6x6 [] = {
 static const unsigned char PROGMEM icon_plus_6x6 [] = {
 	0x30, 0x30, 0xfc, 0xfc, 0x30, 0x30
 };
+
+// 'manual_control', 6x6px
+const unsigned char icon_manual_control [] PROGMEM = {
+	0x30, 0x48, 0x84, 0x84, 0x48, 0x30
+};
 #pragma endregion 
+
+#pragma region State machine variables
+// Remote
+enum class RemoteState {
+  DISCONNECTED,
+  IDLE,
+  MANUAL,
+  SEEKING,
+  ERROR
+};
+
+RemoteState currentState = RemoteState::DISCONNECTED;
+RemoteState previousState = RemoteState::DISCONNECTED;
+
+unsigned long stateEntryTime = 0;
+
+// Controller
+enum class ControlState {
+  IDLE,
+  AIRUP,
+  VENTING,
+  CHECKING,
+  ERROR
+};
+
+ControlState currentControlState = ControlState::IDLE;
+ControlState previousControlState = ControlState::IDLE;
+
+// Short description for known error codes
+static const char* errorCodeToShort(uint8_t code) {
+  switch (code) {
+    case 0:   return "None";
+    case 1:   return "No change";
+    case 2:   return "Too slow";
+    case 3:   return "Sensor";
+    case 4:   return "Over PSI";
+    case 5:   return "Under PSI";
+    case 6:   return "Conflict";
+    case 255: return "Unknown";
+    default:  return "Error";
+  }
+}
+
+#pragma endregion
 
 #pragma region ESP-NOW Variables
 // Replace with your control board MAC
-uint8_t controlBoardAddress[] = { 0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF }; // example
+uint8_t controlBoardAddress[] = { 0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF }; // TODO: determine this
 
 // Hold timer to show "Done!" for 2s in SEEKING state before transitioning
 unsigned long seeking_done_until_ms = 0;
 unsigned long disconnected_show_connected_until_ms = 0;
 
-unsigned long lastPacketReceivedTime = 0;
+volatile unsigned long lastPacketReceivedTime = 0;
 const unsigned long CONNECTION_TIMEOUT = 5000; // ms
 bool isConnected = false;
-float latestPSI = 0.0;
-char lastStatus[32] = "Disconnected";
-bool isCompressorOn = true;
-bool isVentOpen = false;
+bool isConnecting = false;
 
-// Structure for outbound command
-typedef struct {
-  char cmd[16];
-  float targetPSI;
-} OutgoingMessage;
+unsigned long nextPingAtMs = 0;
+unsigned long pingBackoffMs = 200;      // start small
+const unsigned long pingBackoffMaxMs = 2000;
 
-// JSON buffer sizes (tweak if needed)
-const size_t JSON_SEND_SIZE = 64;
-const size_t JSON_RECV_SIZE = 128;
+float currentPSI = 0.0;
+float targetPSI = 25.0; // Default target PSI
 
-struct QueuedMessage {
-  String payload;
-  uint8_t retriesLeft;
-  unsigned long lastSentTime;
-};
+// Manual control runtime vars
+static const unsigned long MANUAL_SEND_INTERVAL_MS = 500;
+static unsigned long lastManualSendMs = 0;
+static bool manualIsSending = false;
+static uint8_t lastManualCodeSent = 0x00; // 0x00=vent, 0xFF=air
 
-std::deque<QueuedMessage> messageQueue;
-const int MAX_RETRIES = 5;
-const unsigned long RESEND_INTERVAL = 500; // ms
-
-float targetPSI = 20.0; // Default target PSI
+// Last error code received from control board (valid only when status == 'E')
+static uint8_t lastErrorCode = 0;
 #pragma endregion
-
-#pragma region State machine variables
-enum RemoteState {
-  BOOT,
-  DISCONNECTED,
-  IDLE,
-  SEEKING,
-  ERROR
-};
-
-RemoteState currentState = BOOT;
-RemoteState previousState = BOOT;
-
-unsigned long stateEntryTime = 0;
-#pragma endregion
-
 
 #pragma region Setups
 void setup() {
   Serial.begin(115200);
 
+  analogSetPinAttenuation(BATTERY_PIN, ADC_ATTEN_DB_11);
   setupScreen();
   setupButtons();
   setupESPNOW();
@@ -240,9 +266,9 @@ void setupButtons() {
   esp_err_t result = esp_sleep_enable_gpio_wakeup();
 
   if (result == ESP_OK) {
-      Serial.println("GPIO Wake-Up set successfully.");
+    Serial.println("GPIO Wake-Up set successfully.");
   } else {
-      Serial.println("Failed to set GPIO Wake-Up as wake-up source.");
+    Serial.println("Failed to set GPIO Wake-Up as wake-up source.");
   }
 }
 
@@ -286,19 +312,18 @@ void setupESPNOW() {
   if (!esp_now_is_peer_exist(controlBoardAddress)) {
     if (esp_now_add_peer(&peerInfo) != ESP_OK) {
       Serial.println("Failed to add peer");
-      enterState(DISCONNECTED);
     } else {
       Serial.println("Peer added successfully");
-      enterState(IDLE);
     }
   }
 
   Serial.println("ESP-NOW initialized");
+  enterState(RemoteState::DISCONNECTED); // remain in DISCONNECTED state until first packet
 }
 #pragma endregion
 
 
-void loop() {  
+void loop() {
   // Read buttons
   SmartButton::service();
   if (millis() - lastButtonPressedTime > SLEEP_TIMEOUT) {
@@ -308,21 +333,19 @@ void loop() {
 
   // Check battery voltage
   updateBatteryStatus();
-  Serial.printf("Battery: %.2f V (%d%%)\n", batteryVoltage, batteryPercent);
+  // Serial.printf("Battery: %.2f V (%d%%)\n", batteryVoltage, batteryPercent);
 
   // Update State Machine & handle display updates
-  currentState = IDLE; // For testing purposes
-  Serial.print("Current state: ");
-  Serial.println(currentState);
   updateConnectionStatus();
 
   display.clearDisplay();
   updateStateMachine();
   display.display();
 
-  // Process ESP-NOW message queue
-  // processMessageQueue();
-  // Serial.println("Processed message queue");
+  // Service ESP-NOW reconnection if needed
+  if (isConnecting && !isConnected) {
+    serviceReconnect();
+  } 
 
   delay(10);
 }
@@ -374,11 +397,22 @@ void leftEventCallback(SmartButton *button, SmartButton::Event event, int clickC
     Serial.println("Left button pressed");
 
     switch (currentState) {
-      case BOOT:
-      case DISCONNECTED:
-      case IDLE:
-      case SEEKING:
-      case ERROR:
+      case RemoteState::IDLE:
+        // Enter manual control mode
+        lastManualSendMs = 0;
+        manualIsSending = false;
+        lastManualCodeSent = 0x00;
+        enterState(RemoteState::MANUAL);
+        break;
+      case RemoteState::MANUAL:
+        // Cancel manual and return to IDLE
+        sendCancelCommand();
+        manualIsSending = false;
+        enterState(RemoteState::IDLE);
+        break;
+      case RemoteState::DISCONNECTED:
+      case RemoteState::SEEKING:
+      case RemoteState::ERROR:
         break;
     }
   }
@@ -387,11 +421,29 @@ void leftEventCallback(SmartButton *button, SmartButton::Event event, int clickC
 void downEventCallback(SmartButton *button, SmartButton::Event event, int clickCounter) {
   lastButtonPressedTime = millis();
 
+  if (event == SmartButton::Event::PRESSED) {
+    // If not manually controlled, start sending manual venting command and everything that goes with that
+    if (currentState == RemoteState::MANUAL && !manualIsSending) {
+      lastManualCodeSent = 0x00; // VENTING
+      manualIsSending = true;
+      lastManualSendMs = millis();
+      sendManualCommand(lastManualCodeSent);
+    }
+  }
+
+  if (event == SmartButton::Event::RELEASED) {
+    // If manually controlled, stop and send idle command
+    if (currentState == RemoteState::MANUAL && manualIsSending) {
+      manualIsSending = false;
+      sendCancelCommand();
+    }
+  }
+
   if (event == SmartButton::Event::CLICK) {
     Serial.println("Down button pressed");
 
     switch (currentState) {
-      case IDLE:
+      case RemoteState::IDLE:
         targetPSI -= 1.0;
         if (targetPSI < 20.0) targetPSI = 20.0; // Min PSI
         break;
@@ -401,12 +453,30 @@ void downEventCallback(SmartButton *button, SmartButton::Event event, int clickC
 
 void upEventCallback(SmartButton *button, SmartButton::Event event, int clickCounter) {
   lastButtonPressedTime = millis();
+
+  if (event == SmartButton::Event::PRESSED) {
+    // If not manually controlled, start sending manual airup command and everything that goes with that
+    if (currentState == RemoteState::MANUAL && !manualIsSending) {
+      lastManualCodeSent = 0xFF; // AIRUP
+      manualIsSending = true;
+      lastManualSendMs = millis();
+      sendManualCommand(lastManualCodeSent);
+    }
+  }
+
+  if (event == SmartButton::Event::RELEASED) {
+    // If manually controlled, stop and send idle command
+    if (currentState == RemoteState::MANUAL && manualIsSending) {
+      manualIsSending = false;
+      sendCancelCommand();
+    }
+  }
   
   if (event == SmartButton::Event::CLICK) {
     Serial.println("Up button pressed");
 
     switch (currentState) {
-      case IDLE:
+      case RemoteState::IDLE:
         targetPSI += 1.0;
         if (targetPSI > 45.0) targetPSI = 45.0; // Max PSI
         break;
@@ -421,41 +491,52 @@ void rightEventCallback(SmartButton *button, SmartButton::Event event, int click
     Serial.println("Right button pressed");
 
     switch (currentState) {
-      case IDLE:
+      case RemoteState::IDLE: {
         // Send start command with current target PSI
         Serial.printf("Sending start command with target PSI: %.1f\n", targetPSI);
         sendStartCommand(targetPSI);
         break;
+      }
 
-      case SEEKING:
+      case RemoteState::SEEKING: {
         // Send cancel command
         sendCancelCommand();
         break;
+      }
 
-      case DISCONNECTED:
+      case RemoteState::DISCONNECTED: {
         Serial.println("User requested reconnect.");
 
         // Retry connection logic
         if (!isConnected) {
           Serial.println("Retrying connection...");
-          setupESPNOW();
+          requestReconnectLight();
         }
 
         // Transition to IDLE if connected
         if (isConnected) {
           Serial.println("Reconnected successfully.");
+          enterState(RemoteState::IDLE);
         }
         break;
+      }
 
-      case ERROR:
-        enterState(IDLE); // User acknowledges error
+      case RemoteState::ERROR: {
+        enterState(RemoteState::IDLE); // User acknowledges error
         break;
+      }
     }
   }
 }
 
 void goToSleep() {
   Serial.println("Entering light sleep...");
+
+  // If sleeping from MANUAL, send a final cancel to stop outputs
+  if (currentState == RemoteState::MANUAL && manualIsSending) {
+    sendCancelCommand();
+    manualIsSending = false;
+  }
 
   sleepSequenceStarted = true;
   drawLogo();
@@ -468,7 +549,8 @@ void goToSleep() {
   esp_light_sleep_start();
 
   Serial.println("Woke up from sleep.");
-  enterState(DISCONNECTED);
+  setupESPNOW();
+  enterState(RemoteState::DISCONNECTED);
 }
 #pragma endregion
 
@@ -479,28 +561,25 @@ void enterState(RemoteState newState) {
   currentState = newState;
   stateEntryTime = millis();
 
-  Serial.print("Transitioning to state: ");
-  switch (newState) {
-    case BOOT:         Serial.println("BOOT"); break;
-    case DISCONNECTED: Serial.println("DISCONNECTED"); break;
-    case IDLE:         Serial.println("IDLE"); break;
-    case SEEKING:      Serial.println("SEEKING"); break;
-    case ERROR:        Serial.println("ERROR"); break;
+  // If leaving MANUAL, send a single cancel and reset manual flags
+  if (previousState == RemoteState::MANUAL && newState != RemoteState::MANUAL) {
+    if (manualIsSending) {
+      sendCancelCommand();
+      manualIsSending = false;
+    }
+    lastManualSendMs = 0;
+    lastManualCodeSent = 0x00;
   }
+
+  Serial.print("Transitioning to state: ");
+  Serial.println((int)newState);
 
   // Add any enter-once logic here if needed
 }
 
 void updateStateMachine() {
   switch (currentState) {
-    case BOOT:
-      // Wipe out logo before transitioning
-      logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, false, 10);
-      enterState(DISCONNECTED);
-      break;
-
-    case DISCONNECTED:
-    {
+    case RemoteState::DISCONNECTED: {
       // Draw display
       drawDisconnectedScreen();
       Serial.println("Drew Disconnected screen");
@@ -513,7 +592,7 @@ void updateStateMachine() {
         // After 1s of showing the connected icon, transition to IDLE
         if (millis() >= disconnected_show_connected_until_ms) {
           disconnected_show_connected_until_ms = 0;
-          enterState(IDLE);
+          enterState(RemoteState::IDLE);
           break;
         }
       } else {
@@ -522,52 +601,66 @@ void updateStateMachine() {
       }
       break;
     }
-
-    case IDLE:
-    {
+    case RemoteState::IDLE: {
       // Draw IDLE screen
       drawIdleScreen();
       
       // If connection is lost, go back to DISCONNECTED
       if (!isConnected) {
-        // enterState(DISCONNECTED); // TODO: Re-enable after testing
+        enterState(RemoteState::DISCONNECTED);
+        break;
       }
 
       break;
     }
+    case RemoteState::MANUAL: {
+      drawManualScreen();
 
-    case SEEKING:
+      // If connection is lost, go back to DISCONNECTED
+      if (!isConnected) {
+        enterState(RemoteState::DISCONNECTED);
+        break;
+      }
+
+      if (manualIsSending && millis() - lastManualSendMs >= MANUAL_SEND_INTERVAL_MS) {
+        sendManualCommand(lastManualCodeSent);
+        lastManualSendMs = millis();
+      }
+      break;
+    }
+    case RemoteState::SEEKING: {
       // Draw SEEKING screen
       drawSeekingScreen();
       Serial.println("Drew Seeking screen");
       
       // Start or maintain the 2-second Done! hold if status is done
-      if (strcmp(lastStatus, "done") == 0 && seeking_done_until_ms == 0) {
+      if (currentControlState == ControlState::IDLE && seeking_done_until_ms == 0) {
         seeking_done_until_ms = millis() + 2000;
       }
 
       // If complete or error received, go to IDLE or ERROR after hold
       if (!isConnected) {
-        // enterState(DISCONNECTED); // optional per testing
-      } else if (strcmp(lastStatus, "error") == 0) {
-        enterState(ERROR);
+        enterState(RemoteState::DISCONNECTED);
+      } else if (currentControlState == ControlState::ERROR) {
+        enterState(RemoteState::ERROR);
       } else if (seeking_done_until_ms != 0 && millis() >= seeking_done_until_ms) {
         seeking_done_until_ms = 0;
-        enterState(IDLE);
+        enterState(RemoteState::IDLE);
         break;
       }
 
       break;
-
-    case ERROR:
+    }
+    case RemoteState::ERROR: {
       // Display error, wait for user action or timeout to return to IDLE
-      // drawErrorScreen();
+      drawErrorScreen();
       Serial.println("Drew Error screen");
       
-      if (millis() - stateEntryTime > 5000) { // auto-clear after 3s
-        enterState(IDLE);
+      if (millis() - stateEntryTime > 5000) { // auto-clear after time
+        enterState(RemoteState::IDLE);
       }
       break;
+    }
   }
 }
 #pragma endregion
@@ -632,30 +725,14 @@ void drawConnectionIcon() {
     display.drawBitmap(connX, connY, icon_connected_8x6, 8, 6, WHITE); 
 }
 
-void drawButtonHints(const char* left, const char* down, const char* up, const char* right) {
-  int iconW = 32;
-  int iconY = SCREEN_HEIGHT - 10;
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(2, iconY);
-  display.print(left);
-  display.setCursor(34, iconY);
-  display.print(down);
-  display.setCursor(66, iconY);
-  display.print(up);
-  display.setCursor(98, iconY);
-  display.print(right);
-}
-
 void drawButtonHints(const uint8_t *left, const uint8_t *down, const uint8_t *up, const uint8_t *right) {
   int iconW = 32;
   int iconY = SCREEN_HEIGHT - 6;
-  int offset =  + (iconW - 6) / 2;
+  int offset = (iconW - 6) / 2;
 
-  // TODO: center the icons better
   if (left)  display.drawBitmap(0  + offset, iconY, left, 6, 6, WHITE);
-  if (up)    display.drawBitmap(32 + offset, iconY, up, 6, 6, WHITE);
-  if (down)  display.drawBitmap(64 + offset, iconY, down, 6, 6, WHITE);
+  if (down)  display.drawBitmap(32 + offset, iconY, down, 6, 6, WHITE);
+  if (up)    display.drawBitmap(64 + offset, iconY, up, 6, 6, WHITE);
   if (right) display.drawBitmap(96 + offset, iconY, right, 6, 6, WHITE);
 }
 
@@ -676,9 +753,9 @@ void drawDisconnectedScreen() {
 
   display.drawBitmap(x, y, bmp, w, h, SSD1306_WHITE);
 
-  if (!isConnected) {
-    // Button hint: right arrow
-    drawButtonHints("", "", "", "Retry");
+  // Right button hint (retry) when disconnected and not actively reconnecting
+  if (!isConnected && !isConnecting) {
+    drawButtonHints(nullptr, nullptr, nullptr, icon_arrow_right_6x6);
   }
 }
 
@@ -687,11 +764,11 @@ void drawIdleScreen() {
   drawBatteryIcon();
   drawConnectionIcon();
 
-  // Button hints: Left = none, Down = raise (up arrow), Up = lower (down arrow), Right = start
-  drawButtonHints(nullptr, icon_plus_6x6, icon_dash_6x6, icon_arrow_right_6x6); // TODO: draw a dash for left button hint
+  // Button hints: Left = manual, Down = decrease, Up = increase, Right = start
+  drawButtonHints(icon_manual_control, icon_dash_6x6, icon_plus_6x6, icon_arrow_right_6x6);
 
   // Prepare strings
-  String currentStr = String((int)latestPSI);
+  String currentStr = String((int)currentPSI);
   String targetStr  = String((int)targetPSI);
 
   // Text settings
@@ -760,19 +837,20 @@ void drawSeekingScreen() {
 
   // Determine verb text
   const char* verb = nullptr;
-  if (isCompressorOn) {
-    verb = "Inflating...";
-  } else if (isVentOpen) {
-    verb = "Deflating...";
-  } else {
-    verb = "Checking...";
+  switch (currentControlState) {
+    case ControlState::IDLE:      verb = "Ready"; break;
+    case ControlState::AIRUP:     verb = "Inflating..."; break;
+    case ControlState::VENTING:   verb = "Deflating..."; break;
+    case ControlState::CHECKING:  verb = "Checking..."; break;
+    case ControlState::ERROR:     verb = "Error"; break;
   }
 
   // Build PSI string
-  String psiStr = String((int)latestPSI) + " PSI";
+  String psiStr = String((int)currentPSI) + " PSI";
 
   // Measure bounds for centered layout
-  int16_t bx, by; uint16_t bw1, bh1, bw2, bh2;
+  int16_t bx, by; 
+  uint16_t bw1, bh1, bw2, bh2;
   display.setTextColor(WHITE);
   display.setTextSize(1);
   display.getTextBounds(verb, 0, 0, &bx, &by, &bw1, &bh1);
@@ -796,100 +874,147 @@ void drawSeekingScreen() {
   display.setCursor(xPSI, yPSI);
   display.print(psiStr);
 }
+
+void drawManualScreen() {
+  // Top status
+  drawBatteryIcon();
+  drawConnectionIcon();
+
+  // Button hints: Left = cancel, Down = vent, Up = airup
+  drawButtonHints(icon_cancel_6x6, icon_arrow_down_6x6, icon_arrow_up_6x6, nullptr);
+
+  // Center label
+  const char* txt = "Manual";
+  display.setTextColor(WHITE);
+  display.setTextSize(2);
+  int16_t bx, by; uint16_t bw, bh;
+  display.getTextBounds(txt, 0, 0, &bx, &by, &bw, &bh);
+  int x = (SCREEN_WIDTH - (int)bw) / 2;
+  int y = (SCREEN_HEIGHT - (int)bh) / 2;
+  if (y < 8) y = 8;
+  display.setCursor(x, y);
+  display.print(txt);
+}
+
+void drawErrorScreen() {
+  // Top status
+  drawBatteryIcon();
+  drawConnectionIcon();
+
+  // Right = acknowledge
+  drawButtonHints(nullptr, nullptr, nullptr, icon_arrow_right_6x6);
+
+  // Build message: prefer short description, fallback to code
+  const char* desc = errorCodeToShort(lastErrorCode);
+
+  // Compose "E:<code>" fallback if description is generic "Error"
+  String msg = desc;
+  if (strcmp(desc, "Error") == 0) {
+    msg = "E:";
+    msg += String((int)lastErrorCode);
+  }
+
+  // Center message, fallback to size 1 if width > screen
+  display.setTextColor(WHITE);
+  display.setTextSize(2);
+  int16_t bx, by; uint16_t bw, bh;
+  display.getTextBounds(msg, 0, 0, &bx, &by, &bw, &bh);
+  if (bw > SCREEN_WIDTH) {
+    display.setTextSize(1);
+    display.getTextBounds(msg, 0, 0, &bx, &by, &bw, &bh);
+  }
+  int x = (SCREEN_WIDTH - (int)bw) / 2;
+  int y = (SCREEN_HEIGHT - (int)bh) / 2;
+  if (y < 8) y = 8;
+  display.setCursor(x, y);
+  display.print(msg);
+}
 #pragma endregion
 
 
 #pragma region Communications
+// Compact ESPNOW payload helpers (0.5 PSI resolution)
+static inline uint8_t psiToByte05(float psi) {
+  if (psi < 0) psi = 0;
+  if (psi > 127.5f) psi = 127.5f;
+  return (uint8_t)roundf(psi * 2.0f);
+}
+
+static inline float byteToPsi05(uint8_t b) {
+  return (float)b * 0.5f;
+}
+
+void requestReconnectLight() {
+  if (isConnected) return;
+  isConnecting = true;
+  pingBackoffMs = 200;
+  nextPingAtMs = 0; // send immediately
+}
+
+void serviceReconnect() {
+  if (!isConnecting || isConnected) return;
+
+  unsigned long now = millis();
+  if (now < nextPingAtMs) return;
+
+  uint8_t ping[2] = { 'P', 0 }; // tiny ping
+  esp_now_send(controlBoardAddress, ping, sizeof(ping));
+
+  nextPingAtMs = now + pingBackoffMs;
+  pingBackoffMs = min(pingBackoffMs * 2, pingBackoffMaxMs);
+}
+
 void sendStartCommand(float targetPSI) {
-  StaticJsonDocument<JSON_SEND_SIZE> doc;
-  doc["cmd"] = "start";
-  doc["target_psi"] = targetPSI;
-
-  char payload[JSON_SEND_SIZE];
-  serializeJson(doc, payload);
-
-  queueMessage(doc);
+  uint8_t payload[2];
+  payload[0] = 'S';
+  payload[1] = psiToByte05(targetPSI);
+  esp_now_send(controlBoardAddress, payload, sizeof(payload));
 }
 
 void sendCancelCommand() {
-  StaticJsonDocument<JSON_SEND_SIZE> doc;
-  doc["cmd"] = "cancel";
+  uint8_t payload[2] = { 'I', 0 };
+  esp_now_send(controlBoardAddress, payload, sizeof(payload));
+}
 
-  char payload[JSON_SEND_SIZE];
-  serializeJson(doc, payload);
-
-  queueMessage(doc);
+void sendManualCommand(uint8_t code) {
+  uint8_t payload[2] = { 'M', code };
+  esp_now_send(controlBoardAddress, payload, sizeof(payload));
 }
 
 void onReceiveData(const esp_now_recv_info_t *esp_now_info, const uint8_t *incomingData, int len) {
   lastPacketReceivedTime = millis(); // update timestamp
+  if (len != 2) return;
 
-  StaticJsonDocument<JSON_RECV_SIZE> doc;
-  DeserializationError error = deserializeJson(doc, incomingData, len);
+  char status = (char)incomingData[0];
+  uint8_t psiB = incomingData[1];
 
-  if (error) {
-    Serial.println("JSON decode failed");
-    return;
+  // Only update PSI when not in ERROR state; in ERROR, second byte is an error code
+  if (status != 'E') {
+    currentPSI = byteToPsi05(psiB);
+  } else {
+    lastErrorCode = psiB; // store error code for ERROR screen
   }
 
-  if (doc.containsKey("psi")) {
-    latestPSI = doc["psi"];
+  switch (status) {
+    case 'I': currentControlState = ControlState::IDLE;     break;
+    case 'U': currentControlState = ControlState::AIRUP;    break;
+    case 'V': currentControlState = ControlState::VENTING;  break;
+    case 'C': currentControlState = ControlState::CHECKING; break;
+    case 'E': currentControlState = ControlState::ERROR;    break;
+    default:  
+      currentControlState = ControlState::ERROR;   
+      Serial.println("Unknown control state: " + String(status));
+      break;
   }
 
-  if (doc.containsKey("comp")) {
-    isCompressorOn = doc["comp"];
-  }
-
-  if (doc.containsKey("vent")) {
-    isVentOpen = doc["vent"];
-  }
-
-  if (doc.containsKey("status")) {
-    strncpy(lastStatus, doc["status"], sizeof(lastStatus));
-    isConnected = true;
-    Serial.printf("Received status: %s\n", lastStatus);
-  }
+  isConnected = true;
+  isConnecting = false;
 }
 
 void onDataSent(const esp_now_send_info_t *tx_info, esp_now_send_status_t status) {
+#if DEBUG_SEND
   Serial.printf("Last Packet Send Status: %s\n", status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
-}
-
-void queueMessage(const JsonDocument& doc) {
-  String payload;
-  serializeJson(doc, payload);
-
-  QueuedMessage msg = { payload, MAX_RETRIES, 0 };
-
-  messageQueue.push_back(msg);
-  Serial.println("Message queued:");
-  Serial.println(payload);
-}
-
-void processMessageQueue() {
-  if (messageQueue.empty()) return;
-
-  QueuedMessage& msg = messageQueue.front();
-  unsigned long now = millis();
-
-  if (now - msg.lastSentTime < RESEND_INTERVAL) return;
-
-  esp_err_t result = esp_now_send(controlBoardAddress, (uint8_t*)msg.payload.c_str(), msg.payload.length());
-  msg.lastSentTime = now;
-
-  if (result == ESP_OK) {
-    Serial.println("Message sent successfully:");
-    Serial.println(msg.payload);
-    messageQueue.pop_front();
-  } else {
-    Serial.println("Send failed. Will retry...");
-    msg.retriesLeft--;
-    if (msg.retriesLeft == 0) {
-      Serial.println("Max retries reached. Dropping message:");
-      Serial.println(msg.payload);
-      messageQueue.pop_front();
-    }
-  }
+#endif
 }
 
 void updateConnectionStatus() {
