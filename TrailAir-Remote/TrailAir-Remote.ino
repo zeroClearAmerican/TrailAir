@@ -12,6 +12,7 @@
 #include <math.h>  // for roundf
 
 #define DEBUG_SEND 1
+// #define DEBUG_DRAWS 0
 
 #pragma region Screen Variables
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
@@ -191,7 +192,7 @@ static const char* errorCodeToShort(uint8_t code) {
 
 #pragma region ESP-NOW Variables
 // Replace with your control board MAC
-uint8_t controlBoardAddress[] = { 0x24, 0x6F, 0x28, 0xAB, 0xCD, 0xEF }; // TODO: determine this
+uint8_t controlBoardAddress[] = { 0x34, 0x85, 0x18, 0x06, 0x55, 0x6C };
 
 // Hold timer to show "Done!" for 2s in SEEKING state before transitioning
 unsigned long seeking_done_until_ms = 0;
@@ -223,7 +224,7 @@ static uint8_t lastErrorCode = 0;
 void setup() {
   Serial.begin(115200);
 
-  analogSetPinAttenuation(BATTERY_PIN, ADC_ATTEN_DB_11);
+  analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
   setupScreen();
   setupButtons();
   setupESPNOW();
@@ -582,7 +583,9 @@ void updateStateMachine() {
     case RemoteState::DISCONNECTED: {
       // Draw display
       drawDisconnectedScreen();
+#ifdef DEBUG_DRAWS
       Serial.println("Drew Disconnected screen");
+#endif
 
       // If connection comes up while in DISCONNECTED, start a 1s hold to show the connected icon
       if (isConnected) {
@@ -604,6 +607,9 @@ void updateStateMachine() {
     case RemoteState::IDLE: {
       // Draw IDLE screen
       drawIdleScreen();
+#ifdef DEBUG_DRAWS
+      Serial.println("Drew IDLE screen");
+#endif
       
       // If connection is lost, go back to DISCONNECTED
       if (!isConnected) {
@@ -615,6 +621,9 @@ void updateStateMachine() {
     }
     case RemoteState::MANUAL: {
       drawManualScreen();
+#ifdef DEBUG_DRAWS
+      Serial.println("Drew Manual screen");
+#endif
 
       // If connection is lost, go back to DISCONNECTED
       if (!isConnected) {
@@ -631,7 +640,9 @@ void updateStateMachine() {
     case RemoteState::SEEKING: {
       // Draw SEEKING screen
       drawSeekingScreen();
+#ifdef DEBUG_DRAWS
       Serial.println("Drew Seeking screen");
+#endif
       
       // Start or maintain the 2-second Done! hold if status is done
       if (currentControlState == ControlState::IDLE && seeking_done_until_ms == 0) {
@@ -654,7 +665,9 @@ void updateStateMachine() {
     case RemoteState::ERROR: {
       // Display error, wait for user action or timeout to return to IDLE
       drawErrorScreen();
+#ifdef DEBUG_DRAWS
       Serial.println("Drew Error screen");
+#endif
       
       if (millis() - stateEntryTime > 5000) { // auto-clear after time
         enterState(RemoteState::IDLE);

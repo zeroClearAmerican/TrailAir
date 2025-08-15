@@ -1,3 +1,18 @@
+#include <stdint.h> // for uint8_t type
+
+// Enums must be defined before Arduino's auto-generated prototypes
+enum class ControlState { IDLE, AIRUP, VENTING, CHECKING, ERROR };
+enum class ErrorCode : uint8_t {
+  NONE = 0,
+  NO_CHANGE = 1,
+  EXCESSIVE_TIME = 2,
+  SENSOR_FAULT = 3,      // reserved
+  OVERPRESSURE = 4,      // reserved
+  UNDERPRESSURE = 5,     // reserved
+  OUTPUT_CONFLICT = 6,   // reserved
+  UNKNOWN = 255
+};
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
@@ -30,22 +45,11 @@ static const int VENT_PIN       = 10;  // HIGH = open
 static const int PRESSURE_PIN   = 3;   // analog sensor input
 
 // Control state
-enum class ControlState { IDLE, AIRUP, VENTING, CHECKING, ERROR };
 static ControlState controlState = ControlState::IDLE;
 static float targetPsi = 0.0f;
 static float currentPsi = 0.0f;
 
 // Error codes (sent when status='E')
-enum class ErrorCode : uint8_t {
-  NONE = 0,
-  NO_CHANGE = 1,
-  EXCESSIVE_TIME = 2,
-  SENSOR_FAULT = 3,      // reserved
-  OVERPRESSURE = 4,      // reserved
-  UNDERPRESSURE = 5,     // reserved
-  OUTPUT_CONFLICT = 6,   // reserved
-  UNKNOWN = 255
-};
 static uint8_t errorCode = (uint8_t)ErrorCode::NONE;
 
 // Status send interval
@@ -91,83 +95,9 @@ void sendStatus();
 void onReceiveData(const esp_now_recv_info_t *esp_now_info, const uint8_t *incomingData, int len);
 void onDataSent(const esp_now_send_info_t *tx_info, esp_now_send_status_t status);
 
-
-#pragma region Control helpers
-static inline void setCompressor(bool on) {
-  digitalWrite(COMPRESSOR_PIN, on ? HIGH : LOW);
-  if (on) digitalWrite(VENT_PIN, LOW); // ensure mutual exclusion
-}
-
-static inline void setVent(bool open) {
-  digitalWrite(VENT_PIN, open ? HIGH : LOW);
-  if (open) digitalWrite(COMPRESSOR_PIN, LOW); // ensure mutual exclusion
-}
-
-static inline char stateToStatusChar(ControlState s) {
-  switch (s) {
-    case ControlState::IDLE:    return 'I';
-    case ControlState::AIRUP:   return 'U';
-    case ControlState::VENTING: return 'V';
-    case ControlState::ERROR:   return 'E';
-    case ControlState::CHECKING: default: return 'I';
-  }
-}
-
-static inline void stopOutputs() {
-  setCompressor(false);
-  setVent(false);
-}
-
-static inline void scheduleBurst(ControlState dir, unsigned long durMs) {
-  phaseStartPsi = currentPsi;
-  phaseStartMs = millis();
-  phaseEndMs = phaseStartMs + durMs;
-  inContinuousRun = false;
-  if (dir == ControlState::AIRUP) {
-    controlState = ControlState::AIRUP;
-    setCompressor(true);
-  } else {
-    controlState = ControlState::VENTING;
-    setVent(true);
-  }
-}
-
-static inline void startSeek(float psi) {
-  // Clamp target to supported range
-  if (psi < 5.0f) psi = 5.0f;
-  if (psi > 50.0f) psi = 50.0f;
-
-  // Reset learning and counters for a fresh seek
-  upRatePsiPerSec = 0.0f; upRateSamples = 0;
-  downRatePsiPerSec = 0.0f; downRateSamples = 0;
-  noChangeBurstCount = 0;
-  inContinuousRun = false;
-  errorCode = (uint8_t)ErrorCode::NONE; // clear any previous error
-
-  targetPsi = psi;
-  stopOutputs();
-  float diff = targetPsi - currentPsi;
-  if (fabsf(diff) <= PSI_TOL) {
-    controlState = ControlState::IDLE;
-    return;
-  }
-  scheduleBurst(diff > 0 ? ControlState::AIRUP : ControlState::VENTING, BURST_MS_INIT);
-}
-
-static inline void enterError(ErrorCode code, const char* reason) {
-  errorCode = (uint8_t)code;
-  controlState = ControlState::ERROR;
-  stopOutputs();
-  Serial.print("ERROR [");
-  Serial.print((int)errorCode);
-  Serial.print("]: ");
-  Serial.println(reason);
-}
-
-#pragma endregion
-
 void setup() {
   Serial.begin(115200);
+  Serial.println("TrailAir Control Board Starting...");
 
   pinMode(COMPRESSOR_PIN, OUTPUT);
   pinMode(VENT_PIN, OUTPUT);
@@ -180,6 +110,8 @@ void setup() {
 }
 
 void setupESPNOW() {
+  Serial.println("Setting up ESP-NOW...");
+
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
 
@@ -372,6 +304,80 @@ void loop() {
     lastStatusSentMs = now;
   }
 }
+
+#pragma region Control helpers
+void setCompressor(bool on) {
+  digitalWrite(COMPRESSOR_PIN, on ? HIGH : LOW);
+  if (on) digitalWrite(VENT_PIN, LOW); // ensure mutual exclusion
+}
+
+void setVent(bool open) {
+  digitalWrite(VENT_PIN, open ? HIGH : LOW);
+  if (open) digitalWrite(COMPRESSOR_PIN, LOW); // ensure mutual exclusion
+}
+
+char stateToStatusChar(ControlState s) {
+  switch (s) {
+    case ControlState::IDLE:    return 'I';
+    case ControlState::AIRUP:   return 'U';
+    case ControlState::VENTING: return 'V';
+    case ControlState::ERROR:   return 'E';
+    case ControlState::CHECKING: default: return 'I';
+  }
+}
+
+void stopOutputs() {
+  setCompressor(false);
+  setVent(false);
+}
+
+void scheduleBurst(ControlState dir, unsigned long durMs) {
+  phaseStartPsi = currentPsi;
+  phaseStartMs = millis();
+  phaseEndMs = phaseStartMs + durMs;
+  inContinuousRun = false;
+  if (dir == ControlState::AIRUP) {
+    controlState = ControlState::AIRUP;
+    setCompressor(true);
+  } else {
+    controlState = ControlState::VENTING;
+    setVent(true);
+  }
+}
+
+void startSeek(float psi) {
+  // Clamp target to supported range
+  if (psi < 5.0f) psi = 5.0f;
+  if (psi > 50.0f) psi = 50.0f;
+
+  // Reset learning and counters for a fresh seek
+  upRatePsiPerSec = 0.0f; upRateSamples = 0;
+  downRatePsiPerSec = 0.0f; downRateSamples = 0;
+  noChangeBurstCount = 0;
+  inContinuousRun = false;
+  errorCode = (uint8_t)ErrorCode::NONE; // clear any previous error
+
+  targetPsi = psi;
+  stopOutputs();
+  float diff = targetPsi - currentPsi;
+  if (fabsf(diff) <= PSI_TOL) {
+    controlState = ControlState::IDLE;
+    return;
+  }
+  scheduleBurst(diff > 0 ? ControlState::AIRUP : ControlState::VENTING, BURST_MS_INIT);
+}
+
+void enterError(ErrorCode code, const char* reason) {
+  errorCode = (uint8_t)code;
+  controlState = ControlState::ERROR;
+  stopOutputs();
+  Serial.print("ERROR [");
+  Serial.print((int)errorCode);
+  Serial.print("]: ");
+  Serial.println(reason);
+}
+
+#pragma endregion
 
 float getSmoothedPressure() {
   // Take reading in mV
