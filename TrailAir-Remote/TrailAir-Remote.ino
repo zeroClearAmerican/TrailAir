@@ -903,10 +903,16 @@ void drawManualScreen() {
   // Button hints: Left = cancel, Down = vent, Up = airup
   drawButtonHints(icon_cancel_6x6, icon_arrow_down_6x6, icon_arrow_up_6x6, nullptr);
 
-  // Center label
+  // Center label based on current control activity
   const char* txt = "Manual";
+  if (currentControlState == ControlState::AIRUP) {
+    txt = "Inflating...";
+  } else if (currentControlState == ControlState::VENTING) {
+    txt = "Deflating...";
+  }
+
   display.setTextColor(WHITE);
-  display.setTextSize(2);
+  display.setTextSize(1);
   int16_t bx, by; uint16_t bw, bh;
   display.getTextBounds(txt, 0, 0, &bx, &by, &bw, &bh);
   int x = (SCREEN_WIDTH - (int)bw) / 2;
