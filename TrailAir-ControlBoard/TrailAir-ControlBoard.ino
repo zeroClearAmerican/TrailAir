@@ -1,7 +1,7 @@
 #include <stdint.h> // for uint8_t type
 
 // Enums must be defined before Arduino's auto-generated prototypes
-enum class ControlState { IDLE, AIRUP, VENTING, CHECKING, ERROR };
+enum class ControlState { IDLE, AIRUP, VENTING, CHECKING };
 enum class ErrorCode : uint8_t {
   NONE = 0,
   NO_CHANGE = 1,
@@ -238,6 +238,7 @@ void loop() {
                 noChangeBurstCount++;
                 if (noChangeBurstCount >= MAX_NOCHANGE_BURSTS) {
                   enterError(ErrorCode::NO_CHANGE, "No pressure change detected after bursts");
+                  break;
                 }
               } else {
                 noChangeBurstCount = 0; // reset on meaningful change
@@ -245,10 +246,6 @@ void loop() {
             } else {
               noChangeBurstCount = 0; // reset if we were in continuous run
             }
-          }
-
-          if (controlState == ControlState::ERROR) {
-            break;
           }
 
           float remaining = targetPsi - currentPsi;
@@ -291,7 +288,6 @@ void loop() {
       }
 
       case ControlState::IDLE:
-      case ControlState::ERROR:
       default:
         stopOutputs();
         break;
@@ -321,8 +317,8 @@ char stateToStatusChar(ControlState s) {
     case ControlState::IDLE:    return 'I';
     case ControlState::AIRUP:   return 'U';
     case ControlState::VENTING: return 'V';
-    case ControlState::ERROR:   return 'E';
-    case ControlState::CHECKING: default: return 'I';
+    case ControlState::CHECKING: return 'C';
+    default: return 'I';
   }
 }
 
@@ -369,12 +365,23 @@ void startSeek(float psi) {
 
 void enterError(ErrorCode code, const char* reason) {
   errorCode = (uint8_t)code;
-  controlState = ControlState::ERROR;
   stopOutputs();
   Serial.print("ERROR [");
   Serial.print((int)errorCode);
   Serial.print("]: ");
   Serial.println(reason);
+
+  // Send a one-off error status immediately (do not wait for periodic tick)
+  uint8_t payload[2];
+  payload[0] = (uint8_t)'E';
+  payload[1] = errorCode;
+  esp_now_send(remoteBoardAddress, payload, sizeof(payload));
+  lastStatusSentMs = 0; // ensure next periodic status is not delayed
+
+  // Clear any ongoing operations and return to IDLE
+  inContinuousRun = false;
+  manualActive = false;
+  controlState = ControlState::IDLE;
 }
 
 #pragma endregion
@@ -409,9 +416,7 @@ float getSmoothedPressure() {
 void sendStatus() {
   uint8_t payload[2];
   payload[0] = (uint8_t)stateToStatusChar(controlState);
-  payload[1] = (controlState == ControlState::ERROR)
-                 ? errorCode
-                 : psiToByte05(currentPsi);
+  payload[1] = psiToByte05(currentPsi);
   esp_now_send(remoteBoardAddress, payload, sizeof(payload));
 }
 

@@ -103,7 +103,7 @@ void downEventCallback(SmartButton *button, SmartButton::Event event, int clickC
 void upEventCallback(SmartButton *button, SmartButton::Event event, int clickCounter);
 void rightEventCallback(SmartButton *button, SmartButton::Event event, int clickCounter);
 
-const unsigned long SLEEP_TIMEOUT = 60000; // ms
+const unsigned long SLEEP_TIMEOUT = 300000; // 5 minutes
 unsigned long lastButtonPressedTime = 0;
 
 // Manual sleep logic variables
@@ -197,6 +197,8 @@ uint8_t controlBoardAddress[] = { 0x34, 0x85, 0x18, 0x06, 0x55, 0x6C };
 // Hold timer to show "Done!" for 2s in SEEKING state before transitioning
 unsigned long seeking_done_until_ms = 0;
 unsigned long disconnected_show_connected_until_ms = 0;
+// Track if an active phase (U/V/C) was observed during SEEKING to avoid premature Done!
+static bool seekingActiveSeen = false;
 
 volatile unsigned long lastPacketReceivedTime = 0;
 const unsigned long CONNECTION_TIMEOUT = 5000; // ms
@@ -496,6 +498,7 @@ void rightEventCallback(SmartButton *button, SmartButton::Event event, int click
         // Send start command with current target PSI
         Serial.printf("Sending start command with target PSI: %.1f\n", targetPSI);
         sendStartCommand(targetPSI);
+        enterState(RemoteState::SEEKING);  // <-- ensure UI follows the controller
         break;
       }
 
@@ -576,6 +579,10 @@ void enterState(RemoteState newState) {
   Serial.println((int)newState);
 
   // Add any enter-once logic here if needed
+  if (newState == RemoteState::SEEKING) {
+    seekingActiveSeen = false;
+    seeking_done_until_ms = 0;
+  }
 }
 
 void updateStateMachine() {
@@ -645,7 +652,7 @@ void updateStateMachine() {
 #endif
       
       // Start or maintain the 2-second Done! hold if status is done
-      if (currentControlState == ControlState::IDLE && seeking_done_until_ms == 0) {
+      if (currentControlState == ControlState::IDLE && seeking_done_until_ms == 0 && seekingActiveSeen) {
         seeking_done_until_ms = millis() + 2000;
       }
 
@@ -682,7 +689,7 @@ void updateStateMachine() {
 #pragma region Display Functions
 void drawLogo(void) {
   display.clearDisplay();
-  display.drawBitmap(0, 0, logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, 1);
+  display.drawBitmap((SCREEN_WIDTH - LOGO_WIDTH) / 2, 0, logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, 1);
   display.display();
 }
 
@@ -1018,6 +1025,21 @@ void onReceiveData(const esp_now_recv_info_t *esp_now_info, const uint8_t *incom
       currentControlState = ControlState::ERROR;   
       Serial.println("Unknown control state: " + String(status));
       break;
+  }
+
+  // While in SEEKING, mark active and only start Done! after an active phase
+  if (currentState == RemoteState::SEEKING) {
+    if (status == 'U' || status == 'V' || status == 'C') {
+      seekingActiveSeen = true;
+    } else if (status == 'I' && seekingActiveSeen && seeking_done_until_ms == 0) {
+      seeking_done_until_ms = millis() + 2000;
+    }
+  }
+
+  // Drive remote UI state
+  if (status == 'E') {
+    if (currentState != RemoteState::ERROR) 
+      enterState(RemoteState::ERROR);
   }
 
   isConnected = true;
