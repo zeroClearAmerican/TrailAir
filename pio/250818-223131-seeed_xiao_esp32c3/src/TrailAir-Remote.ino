@@ -21,7 +21,7 @@
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 #define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
 #define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+Adafruit_SSD1306 d_(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 #define LOGO_HEIGHT   32 
 #define LOGO_WIDTH    35
@@ -236,13 +236,13 @@ void setup() {
 
 void setupScreen() {
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+  if(!d_.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 OLED screen allocation failed"));
     for(;;); // Don't proceed, loop forever
   }
 
   // Clear display and wipe in logo for 2s
-  display.clearDisplay();
+  d_.clearDisplay();
   logo_wipe(logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, true, 10);
 }
 
@@ -339,9 +339,9 @@ void loop() {
   // Update State Machine & handle display updates
   updateConnectionStatus();
 
-  display.clearDisplay();
+  d_.clearDisplay();
   updateStateMachine();
-  display.display();
+  d_.display();
 
   // Service ESP-NOW reconnection if needed
   if (isConnecting && !isConnected) {
@@ -686,29 +686,29 @@ void updateStateMachine() {
 
 #pragma region Display Functions
 void drawLogo(void) {
-  display.clearDisplay();
-  display.drawBitmap((SCREEN_WIDTH - LOGO_WIDTH) / 2, 0, logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, 1);
-  display.display();
+  d_.clearDisplay();
+  d_.drawBitmap((SCREEN_WIDTH - LOGO_WIDTH) / 2, 0, logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, 1);
+  d_.display();
 }
 
 void logo_wipe(const uint8_t *bitmap, uint8_t bmp_width, uint8_t bmp_height, bool wipe_in, uint16_t delay_ms) {
   int x = (SCREEN_WIDTH - bmp_width) / 2;
   int y = (SCREEN_HEIGHT - bmp_height) / 2;
 
-  display.clearDisplay();
+  d_.clearDisplay();
 
   for (int w = 0; w <= bmp_width; w++) {
-    display.drawBitmap(x, y, bitmap, bmp_width, bmp_height, WHITE);
+    d_.drawBitmap(x, y, bitmap, bmp_width, bmp_height, WHITE);
 
     if (wipe_in) {
       // Mask the right side, revealing only the left w pixels
-      display.fillRect(x + w, y, bmp_width - w, bmp_height, BLACK);
+      d_.fillRect(x + w, y, bmp_width - w, bmp_height, BLACK);
     } else {
       // Mask the left side, hiding the left w pixels
-      display.fillRect(x, y, w, bmp_height, BLACK);
+      d_.fillRect(x, y, w, bmp_height, BLACK);
     }
 
-    display.display();
+    d_.display();
     delay(delay_ms);
   }
 }
@@ -720,15 +720,15 @@ void drawBatteryIcon() {
   int batteryW = 12;
   int batteryH = 6;
   int fillW = (int)((batteryPercent / 100.0) * (batteryW - 2));
-  display.drawRect(batteryX, batteryY, batteryW, batteryH, WHITE); // battery outline
-  display.drawRect(batteryX + batteryW, batteryY + 2, 1, 2, WHITE); // battery nub
-  display.fillRect(batteryX + 1, batteryY + 1, fillW, batteryH - 2, WHITE); // battery fill
+  d_.drawRect(batteryX, batteryY, batteryW, batteryH, WHITE); // battery outline
+  d_.drawRect(batteryX + batteryW, batteryY + 2, 1, 2, WHITE); // battery nub
+  d_.fillRect(batteryX + 1, batteryY + 1, fillW, batteryH - 2, WHITE); // battery fill
 
   if (batteryPercent < 15) {
-    display.setTextSize(1);
-    display.setTextColor(WHITE);
-    display.setCursor(batteryX + batteryW + 2, batteryY);
-    display.print("!"); // exclamation mark
+    d_.setTextSize(1);
+    d_.setTextColor(WHITE);
+    d_.setCursor(batteryX + batteryW + 2, batteryY);
+    d_.print("!"); // exclamation mark
   }
 }
 
@@ -738,9 +738,9 @@ void drawConnectionIcon() {
   int connY = 1;
 
   if (!isConnected) 
-    display.drawBitmap(connX, connY, icon_disconnected_8x6, 8, 6, WHITE); 
+    d_.drawBitmap(connX, connY, icon_disconnected_8x6, 8, 6, WHITE); 
   else
-    display.drawBitmap(connX, connY, icon_connected_8x6, 8, 6, WHITE); 
+    d_.drawBitmap(connX, connY, icon_connected_8x6, 8, 6, WHITE); 
 }
 
 void drawButtonHints(const uint8_t *left, const uint8_t *down, const uint8_t *up, const uint8_t *right) {
@@ -748,10 +748,10 @@ void drawButtonHints(const uint8_t *left, const uint8_t *down, const uint8_t *up
   int iconY = SCREEN_HEIGHT - 6;
   int offset = (iconW - 6) / 2;
 
-  if (left)  display.drawBitmap(0  + offset, iconY, left, 6, 6, WHITE);
-  if (down)  display.drawBitmap(32 + offset, iconY, down, 6, 6, WHITE);
-  if (up)    display.drawBitmap(64 + offset, iconY, up, 6, 6, WHITE);
-  if (right) display.drawBitmap(96 + offset, iconY, right, 6, 6, WHITE);
+  if (left)  d_.drawBitmap(0  + offset, iconY, left, 6, 6, WHITE);
+  if (down)  d_.drawBitmap(32 + offset, iconY, down, 6, 6, WHITE);
+  if (up)    d_.drawBitmap(64 + offset, iconY, up, 6, 6, WHITE);
+  if (right) d_.drawBitmap(96 + offset, iconY, right, 6, 6, WHITE);
 }
 
 void drawDisconnectedScreen() {
@@ -769,7 +769,7 @@ void drawDisconnectedScreen() {
     bmp = icon_connected_20x20;
   }
 
-  display.drawBitmap(x, y, bmp, w, h, SSD1306_WHITE);
+  d_.drawBitmap(x, y, bmp, w, h, SSD1306_WHITE);
 
   // Right button hint (retry) when disconnected and not actively reconnecting
   if (!isConnected && !isConnecting) {
@@ -790,14 +790,14 @@ void drawIdleScreen() {
   String targetStr  = String((int)targetPSI);
 
   // Text settings
-  display.setTextColor(WHITE);
-  display.setTextSize(2);
+  d_.setTextColor(WHITE);
+  d_.setTextSize(2);
 
   // Measure text bounds (uses current text size)
   int16_t bx, by; uint16_t bw, bh;
-  display.getTextBounds(currentStr, 0, 0, &bx, &by, &bw, &bh);
+  d_.getTextBounds(currentStr, 0, 0, &bx, &by, &bw, &bh);
   uint16_t curW = bw, curH = bh;
-  display.getTextBounds(targetStr, 0, 0, &bx, &by, &bw, &bh);
+  d_.getTextBounds(targetStr, 0, 0, &bx, &by, &bw, &bh);
   uint16_t tgtW = bw, tgtH = bh;
 
   // Layout regions
@@ -809,25 +809,25 @@ void drawIdleScreen() {
   // Center-left current PSI
   int curX = leftX0 + (leftX1 - leftX0 - (int)curW) / 2;
   if (curX < 0) curX = 0;
-  display.setCursor(curX, centerY);
-  display.print(currentStr);
+  d_.setCursor(curX, centerY);
+  d_.print(currentStr);
 
   // Center-right target PSI
   int tgtX = rightX0 + (rightX1 - rightX0 - (int)tgtW) / 2;
   if (tgtX < rightX0) tgtX = rightX0;
-  display.setCursor(tgtX, centerY);
-  display.print(targetStr);
+  d_.setCursor(tgtX, centerY);
+  d_.print(targetStr);
 
   // Underline target PSI
   int underlineY = centerY + (int)tgtH;
   if (underlineY < SCREEN_HEIGHT) {
-    display.drawLine(tgtX, underlineY, tgtX + (int)tgtW, underlineY, WHITE);
+    d_.drawLine(tgtX, underlineY, tgtX + (int)tgtW, underlineY, WHITE);
   }
 
   // Separator arrow pointing right (center of screen)
   int ax = (SCREEN_WIDTH / 2) - 5;
   int ay = SCREEN_HEIGHT / 2;
-  display.fillTriangle(ax, ay - 5, ax, ay + 5, ax + 9, ay, WHITE);
+  d_.fillTriangle(ax, ay - 5, ax, ay + 5, ax + 9, ay, WHITE);
 }
 
 void drawSeekingScreen() {
@@ -841,15 +841,15 @@ void drawSeekingScreen() {
   // If we're showing the Done! hold message, center it big and return
   if (seeking_done_until_ms != 0) {
     const char* doneTxt = "Done!";
-    display.setTextColor(WHITE);
-    display.setTextSize(2);
+    d_.setTextColor(WHITE);
+    d_.setTextSize(2);
     int16_t bx, by; uint16_t bw, bh;
-    display.getTextBounds(doneTxt, 0, 0, &bx, &by, &bw, &bh);
+    d_.getTextBounds(doneTxt, 0, 0, &bx, &by, &bw, &bh);
     int x = (SCREEN_WIDTH - (int)bw) / 2;
     int y = (SCREEN_HEIGHT - (int)bh) / 2;
     if (y < 8) y = 8; // keep clear of status icons
-    display.setCursor(x, y);
-    display.print(doneTxt);
+    d_.setCursor(x, y);
+    d_.print(doneTxt);
     return;
   }
 
@@ -869,11 +869,11 @@ void drawSeekingScreen() {
   // Measure bounds for centered layout
   int16_t bx, by; 
   uint16_t bw1, bh1, bw2, bh2;
-  display.setTextColor(WHITE);
-  display.setTextSize(1);
-  display.getTextBounds(verb, 0, 0, &bx, &by, &bw1, &bh1);
-  display.setTextSize(2);
-  display.getTextBounds(psiStr, 0, 0, &bx, &by, &bw2, &bh2);
+  d_.setTextColor(WHITE);
+  d_.setTextSize(1);
+  d_.getTextBounds(verb, 0, 0, &bx, &by, &bw1, &bh1);
+  d_.setTextSize(2);
+  d_.getTextBounds(psiStr, 0, 0, &bx, &by, &bw2, &bh2);
 
   int totalH = (int)bh1 + 2 + (int)bh2;
   int yStart = (SCREEN_HEIGHT - totalH) / 2;
@@ -881,16 +881,16 @@ void drawSeekingScreen() {
 
   // Draw verb (size 1) centered
   int xVerb = (SCREEN_WIDTH - (int)bw1) / 2;
-  display.setTextSize(1);
-  display.setCursor(xVerb, yStart);
-  display.print(verb);
+  d_.setTextSize(1);
+  d_.setCursor(xVerb, yStart);
+  d_.print(verb);
 
   // Draw PSI (size 2) centered below
   int xPSI = (SCREEN_WIDTH - (int)bw2) / 2;
   int yPSI = yStart + (int)bh1 + 2;
-  display.setTextSize(2);
-  display.setCursor(xPSI, yPSI);
-  display.print(psiStr);
+  d_.setTextSize(2);
+  d_.setCursor(xPSI, yPSI);
+  d_.print(psiStr);
 }
 
 void drawManualScreen() {
@@ -909,15 +909,15 @@ void drawManualScreen() {
     txt = "Deflating...";
   }
 
-  display.setTextColor(WHITE);
-  display.setTextSize(1);
+  d_.setTextColor(WHITE);
+  d_.setTextSize(1);
   int16_t bx, by; uint16_t bw, bh;
-  display.getTextBounds(txt, 0, 0, &bx, &by, &bw, &bh);
+  d_.getTextBounds(txt, 0, 0, &bx, &by, &bw, &bh);
   int x = (SCREEN_WIDTH - (int)bw) / 2;
   int y = (SCREEN_HEIGHT - (int)bh) / 2;
   if (y < 8) y = 8;
-  display.setCursor(x, y);
-  display.print(txt);
+  d_.setCursor(x, y);
+  d_.print(txt);
 }
 
 void drawErrorScreen() {
@@ -939,19 +939,19 @@ void drawErrorScreen() {
   }
 
   // Center message, fallback to size 1 if width > screen
-  display.setTextColor(WHITE);
-  display.setTextSize(2);
+  d_.setTextColor(WHITE);
+  d_.setTextSize(2);
   int16_t bx, by; uint16_t bw, bh;
-  display.getTextBounds(msg, 0, 0, &bx, &by, &bw, &bh);
+  d_.getTextBounds(msg, 0, 0, &bx, &by, &bw, &bh);
   if (bw > SCREEN_WIDTH) {
-    display.setTextSize(1);
-    display.getTextBounds(msg, 0, 0, &bx, &by, &bw, &bh);
+    d_.setTextSize(1);
+    d_.getTextBounds(msg, 0, 0, &bx, &by, &bw, &bh);
   }
   int x = (SCREEN_WIDTH - (int)bw) / 2;
   int y = (SCREEN_HEIGHT - (int)bh) / 2;
   if (y < 8) y = 8;
-  display.setCursor(x, y);
-  display.print(msg);
+  d_.setCursor(x, y);
+  d_.print(msg);
 }
 #pragma endregion
 
