@@ -1,0 +1,14 @@
+{
+    "name": "TA_Display",
+    "version": "1.0.0",
+    "dependencies": [
+        {
+            "name": "adafruit/Adafruit GFX Library",
+            "version": "^1.12.1"
+        },
+        {
+            "name": "adafruit/Adafruit SSD1306",
+            "version": "^2.5.15"
+        }
+    ]
+}

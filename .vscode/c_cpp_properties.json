@@ -29,7 +29,9 @@
             "includePath": [
                 "C:\\Users\\Mason\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\**",
                 "C:\\Users\\Mason\\Documents\\Arduino\\libraries\\**",
-                "C:\\users\\mason\\appdata\\local\\arduino15\\packages\\esp32\\tools\\**"
+                "C:\\users\\mason\\appdata\\local\\arduino15\\packages\\esp32\\tools\\**",
+                "${workspaceFolder}\\pio\\*",
+                "${workspaceFolder}/pioLib/*"
             ],
             "forcedInclude": [
                 "C:\\Users\\Mason\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\2.0.14\\cores\\esp32\\Arduino.h"
