@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <TA_Errors.h>
 
 namespace ta {
     namespace display {
@@ -45,6 +46,14 @@ namespace ta {
 
         class TA_Display {
             public:
+                // Style tokens to standardize spacing/sizes
+                struct Style {
+                    uint8_t statusRowH = 8;
+                    uint8_t btnIcon = 6;
+                    uint8_t colGap = 16;
+                    uint8_t valueTextSize = 2;
+                };
+
                 explicit TA_Display(Adafruit_SSD1306& d) : d_(d) {}
 
                 // Initialize the display (call once from setup)
@@ -74,9 +83,20 @@ namespace ta {
 
                 // Helpers
                 const char* shortError_(uint8_t code) const;
+                // Layout helpers (to reduce repeated getTextBounds/centering math)
+                int topSafe_() const; // space for status row
+                void measure_(const String& s, uint8_t size, int16_t& w, int16_t& h);
+                int centerX_(int w) const;
+                int centerYBetween_(int h, int top, int bottom) const;
+                void drawCenteredText_(const String& s, uint8_t size, int y);
+                void drawTwoLineCentered_(const String& top, uint8_t topSize,
+                                          const String& bottom, uint8_t bottomSize,
+                                          int spacing, int topClamp);
+                void drawTwoColumnValues_(const String& left, const String& right, uint8_t textSize, uint8_t gap);
 
             private:
                 Adafruit_SSD1306& d_;
+                Style style_{};
         };
 
     } // namespace display

@@ -1,7 +1,28 @@
+#include <Arduino.h>
 #include "TA_Controller.h"
+#include "TA_Actuators.h"
 #include <math.h>
 
 using namespace ta::ctl;
+
+// Adapter implementations
+void Controller::ActuatorAdapter::setCompressor(bool on) { if (hw) hw->setCompressor(on); }
+void Controller::ActuatorAdapter::setVent(bool open) { if (hw) hw->setVent(open); }
+void Controller::ActuatorAdapter::stopAll() { if (hw) hw->stopAll(); }
+
+void Controller::begin(ta::act::Actuators* act, const Config& cfg) {
+  cfg_ = cfg;
+  actAdapter_.hw = act;
+  out_ = act ? static_cast<IOutputs*>(&actAdapter_) : nullptr;
+  reset_();
+}
+
+void Controller::begin(IOutputs* outputs, const Config& cfg) {
+  cfg_ = cfg;
+  out_ = outputs;
+  actAdapter_.hw = nullptr;
+  reset_();
+}
 
 void Controller::reset_() {
   state_ = State::IDLE;
@@ -16,7 +37,7 @@ void Controller::reset_() {
 }
 
 void Controller::stopOutputs_() {
-  if (act_) act_->stopAll();
+  if (out_) out_->stopAll();
 }
 
 char Controller::statusChar() const {
@@ -41,9 +62,9 @@ void Controller::enter_(State s, uint32_t now) {
 void Controller::manualAirUp(bool active) {
   manualActive_ = active;
   lastManualRefreshMs_ = millis();
-  if (!act_) return;
+  if (!out_) return;
   if (active) {
-    act_->setCompressor(true);
+    out_->setCompressor(true);
     state_ = State::AIRUP;
   } else {
     stopOutputs_();
@@ -54,9 +75,9 @@ void Controller::manualAirUp(bool active) {
 void Controller::manualVent(bool active) {
   manualActive_ = active;
   lastManualRefreshMs_ = millis();
-  if (!act_) return;
+  if (!out_) return;
   if (active) {
-    act_->setVent(true);
+    out_->setVent(true);
     state_ = State::VENTING;
   } else {
     stopOutputs_();
@@ -103,12 +124,12 @@ void Controller::scheduleBurst_(State dir, unsigned long durMs, uint32_t now) {
   phaseStartMs_ = now;
   phaseEndMs_ = now + durMs;
   inContinuous_ = false;
-  if (!act_) return;
+  if (!out_) return;
   if (dir == State::AIRUP) {
-    act_->setCompressor(true);
+    out_->setCompressor(true);
     state_ = State::AIRUP;
   } else {
-    act_->setVent(true);
+    out_->setVent(true);
     state_ = State::VENTING;
   }
 }
@@ -119,6 +140,92 @@ void Controller::enterError_(ErrorCode ec, const char* /*why*/) {
   manualActive_ = false;
   inContinuous_ = false;
   state_ = State::ERROR;
+}
+
+void Controller::handleRunPhase_(State runState, uint32_t now) {
+  float remaining = targetPsi_ - currentPsi_;
+  if (fabsf(remaining) <= cfg_.psiTol) {
+    stopOutputs_();
+    enter_(State::CHECKING, now);
+    lastBurstEndMs_ = now;
+    return;
+  }
+  // End burst / continuous phases
+  if (now >= phaseEndMs_) {
+    stopOutputs_();
+    enter_(State::CHECKING, now);
+    lastBurstEndMs_ = now;
+    return;
+  }
+  (void)runState; // placeholder for per-mode nuances
+}
+
+void Controller::handleChecking_(uint32_t now) {
+  if (now < phaseEndMs_) return;
+
+  float dt = (lastBurstEndMs_ > phaseStartMs_)
+             ? (lastBurstEndMs_ - phaseStartMs_) / 1000.0f
+             : (now - phaseStartMs_) / 1000.0f;
+  float dPsi = currentPsi_ - phaseStartPsi_;
+
+  if (dt > cfg_.checkDtMinSec) {
+    if (dPsi > cfg_.dPsiNoiseEps) {
+      upRate_ = (upRate_ * upSamples_ + (fabsf(dPsi) / dt)) / (upSamples_ + 1);
+      upSamples_++;
+    } else if (dPsi < -cfg_.dPsiNoiseEps) {
+      downRate_ = (downRate_ * downSamples_ + (fabsf(dPsi) / dt)) / (downSamples_ + 1);
+      downSamples_++;
+    }
+    if (!inContinuous_) {
+      if (fabsf(dPsi) < cfg_.noChangeEps) {
+        noChangeBurstCount_++;
+        if (noChangeBurstCount_ >= cfg_.maxNoChangeBursts) {
+          enterError_(ErrorCode::NO_CHANGE, "No change");
+          return;
+        }
+      } else {
+        noChangeBurstCount_ = 0;
+      }
+    } else {
+      noChangeBurstCount_ = 0;
+    }
+  }
+
+  float remaining = targetPsi_ - currentPsi_;
+  if (fabsf(remaining) <= cfg_.psiTol) {
+    state_ = State::IDLE;
+    stopOutputs_();
+    return;
+  }
+
+  bool needUp = remaining > 0;
+  bool haveRate = needUp ? (upSamples_ >= 2 && upRate_ > cfg_.rateMinEps)
+                         : (downSamples_ >= 2 && downRate_ > cfg_.rateMinEps);
+  if (haveRate) {
+    float rate = needUp ? upRate_ : downRate_;
+    unsigned long predictedFullMs = (unsigned long)(1000.0f * (fabsf(remaining) / rate));
+    if (predictedFullMs > cfg_.maxContinuousMs) {
+      enterError_(ErrorCode::EXCESSIVE_TIME, "Too long");
+      return;
+    }
+    float aim = fmaxf(0.0f, fabsf(remaining) - cfg_.aimMarginPsi);
+    unsigned long runMs = (unsigned long)(1000.0f * (aim / rate));
+    if (runMs < cfg_.runMinMs) runMs = cfg_.runMinMs;
+    if (runMs > cfg_.runMaxMs) runMs = cfg_.runMaxMs;
+    // schedule continuous
+    inContinuous_ = true;
+    phaseStartPsi_ = currentPsi_;
+    phaseStartMs_ = now;
+    phaseEndMs_ = now + runMs;
+    if (needUp) { state_ = State::AIRUP; if (out_) out_->setCompressor(true); }
+    else        { state_ = State::VENTING;  if (out_) out_->setVent(true); }
+  } else {
+    scheduleBurst_(needUp ? State::AIRUP : State::VENTING, cfg_.burstMsInit, now);
+  }
+}
+
+void Controller::handleIdle_(uint32_t /*now*/) {
+  stopOutputs_();
 }
 
 void Controller::update(uint32_t now, float currentPsi) {
@@ -133,103 +240,19 @@ void Controller::update(uint32_t now, float currentPsi) {
     }
   }
 
-  if (state_ == State::ERROR || manualActive_) {
-    return;
-  }
+  if (state_ == State::ERROR || manualActive_) return;
 
   switch (state_) {
     case State::AIRUP:
-    case State::VENTING: {
-      float remaining = targetPsi_ - currentPsi_;
-      if (fabsf(remaining) <= cfg_.psiTol) {
-        stopOutputs_();
-        enter_(State::CHECKING, now);
-        lastBurstEndMs_ = now;
-        break;
-      }
-      // End burst / continuous phases
-      if (inContinuous_) {
-        if (now >= phaseEndMs_) {
-          stopOutputs_();
-          enter_(State::CHECKING, now);
-          lastBurstEndMs_ = now;
-        }
-      } else {
-        if (now >= phaseEndMs_) {
-          stopOutputs_();
-          enter_(State::CHECKING, now);
-          lastBurstEndMs_ = now;
-        }
-      }
+    case State::VENTING:
+      handleRunPhase_(state_, now);
       break;
-    }
-    case State::CHECKING: {
-      if (now >= phaseEndMs_) {
-        float dt = (lastBurstEndMs_ > phaseStartMs_)
-                   ? (lastBurstEndMs_ - phaseStartMs_) / 1000.0f
-                   : (now - phaseStartMs_) / 1000.0f;
-        float dPsi = currentPsi_ - phaseStartPsi_;
-        if (dt > 0.02f) {
-          if (dPsi > 0.01f) {
-            upRate_ = (upRate_ * upSamples_ + (fabsf(dPsi) / dt)) / (upSamples_ + 1);
-            upSamples_++;
-          } else if (dPsi < -0.01f) {
-            downRate_ = (downRate_ * downSamples_ + (fabsf(dPsi) / dt)) / (downSamples_ + 1);
-            downSamples_++;
-          }
-          if (!inContinuous_) {
-            if (fabsf(dPsi) < cfg_.noChangeEps) {
-              noChangeBurstCount_++;
-              if (noChangeBurstCount_ >= cfg_.maxNoChangeBursts) {
-                enterError_(ErrorCode::NO_CHANGE, "No change");
-                return;
-              }
-            } else {
-              noChangeBurstCount_ = 0;
-            }
-          } else {
-            noChangeBurstCount_ = 0;
-          }
-        }
-
-        float remaining = targetPsi_ - currentPsi_;
-        if (fabsf(remaining) <= cfg_.psiTol) {
-          state_ = State::IDLE;
-          stopOutputs_();
-        } else {
-          bool needUp = remaining > 0;
-            bool haveRate = needUp ? (upSamples_ >= 2 && upRate_ > 0.001f)
-                                   : (downSamples_ >= 2 && downRate_ > 0.001f);
-          if (haveRate) {
-            float rate = needUp ? upRate_ : downRate_;
-            unsigned long predictedFullMs =
-              (unsigned long)(1000.0f * (fabsf(remaining) / rate));
-            if (predictedFullMs > cfg_.maxContinuousMs) {
-              enterError_(ErrorCode::EXCESSIVE_TIME, "Too long");
-              return;
-            }
-            float margin = 0.2f;
-            float aim = fmaxf(0.0f, fabsf(remaining) - margin);
-            unsigned long runMs = (unsigned long)(1000.0f * (aim / rate));
-            if (runMs < cfg_.runMinMs) runMs = cfg_.runMinMs;
-            if (runMs > cfg_.runMaxMs) runMs = cfg_.runMaxMs;
-            // schedule continuous
-            inContinuous_ = true;
-            phaseStartPsi_ = currentPsi_;
-            phaseStartMs_ = now;
-            phaseEndMs_ = now + runMs;
-            if (needUp) { state_ = State::AIRUP; act_->setCompressor(true); }
-            else        { state_ = State::VENTING; act_->setVent(true); }
-          } else {
-            scheduleBurst_(needUp ? State::AIRUP : State::VENTING, cfg_.burstMsInit, now);
-          }
-        }
-      }
+    case State::CHECKING:
+      handleChecking_(now);
       break;
-    }
     case State::IDLE:
     default:
-      stopOutputs_();
+      handleIdle_(now);
       break;
   }
 }

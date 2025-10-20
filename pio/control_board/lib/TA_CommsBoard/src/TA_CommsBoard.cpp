@@ -3,6 +3,7 @@
 
 using namespace ta::comms;
 
+// Static instance used by C callbacks to reach the current object
 BoardLink* BoardLink::inst_ = nullptr;
 
 bool BoardLink::begin() {
@@ -13,8 +14,9 @@ bool BoardLink::begin() {
     Serial.println("ESP-NOW init failed");
     return false;
   }
-  esp_now_register_recv_cb(&BoardLink::onRecvStatic);
-  esp_now_register_send_cb(&BoardLink::onSentStatic);
+  // Bind instance methods via lambdas capturing no state (function pointer compatible)
+  esp_now_register_recv_cb([](const uint8_t* mac, const uint8_t* data, int len){ if (inst_) inst_->onRecv(mac, data, len); });
+  esp_now_register_send_cb([](const uint8_t* /*mac*/, esp_now_send_status_t /*status*/){ /* no-op */ });
 
   loadPeer_();
   if (paired_) {
@@ -120,15 +122,6 @@ void BoardLink::handlePairReq_(const uint8_t* mac, uint8_t group) {
   }
 }
 
-void BoardLink::onRecvStatic(const uint8_t* mac, const uint8_t* data, int len) {
-  if (inst_) inst_->onRecv(mac, data, len);
-}
-void BoardLink::onSentStatic(const uint8_t* /*mac*/, esp_now_send_status_t status) {
-#if 0
-  Serial.printf("Send %s\n", status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
-#endif
-}
-
 void BoardLink::onRecv(const uint8_t* mac, const uint8_t* data, int len) {
   using namespace ta::protocol;
   if (len == 2 && isPairingFrame(data, len)) {
@@ -141,23 +134,10 @@ void BoardLink::onRecv(const uint8_t* mac, const uint8_t* data, int len) {
   if (!paired_ || memcmp(mac, peer_, 6) != 0) return;
   if (len != 2) return;
 
-  char c = (char)data[0];
-  uint8_t v = data[1];
-  Command cmd;
-
-  switch (c) {
-    case 'I': cmd.type = CmdType::Idle; break;
-    case 'S': cmd.type = CmdType::Seek; cmd.targetPsi = byteToPsi05(v); break;
-    case 'M': {
-      cmd.type = CmdType::Manual;
-      cmd.raw = v;
-      break;
-    }
-    case 'P': cmd.type = CmdType::Ping; break;
-    default:  cmd.type = CmdType::Unknown; break;
-  }
+  Request req;
+  if (!parseRequest(data, len, req)) return;
 
   lastRxMs_ = millis(); // mark remote activity
 
-  if (cmdCb_) cmdCb_(cmdCtx_, cmd);
+  if (reqCb_) reqCb_(reqCtx_, req);
 }

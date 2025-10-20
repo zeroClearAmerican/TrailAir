@@ -23,9 +23,10 @@ namespace ta {
             Cleared
         };
 
-        using ta::protocol::StatusMsg;
+        using ta::protocol::Response;
+        using ta::protocol::Request;
 
-        typedef void (*StatusCallback)(void* ctx, const StatusMsg& msg);
+        typedef void (*StatusCallback)(void* ctx, const Response& msg);
         typedef void (*PairCallback)(void* ctx, PairEvent ev, const uint8_t mac[6]);
 
         class EspNowLink {
@@ -47,6 +48,8 @@ namespace ta {
 
                 // Connection state (derived from lastSeen + timeout)
                 void setConnectionTimeoutMs(uint32_t ms) { connectionTimeoutMs_ = ms; }
+                void setPingBackoffStartMs(uint32_t ms) { pingBackoffMs_ = ms; }
+                void setPairReqIntervalMs(uint32_t ms) { pairReqIntervalMs_ = ms; }
                 bool isConnected() const { return isConnected_; }
                 bool isConnecting() const { return isConnecting_; }
                 uint32_t lastSeenMs() const { return lastSeenMs_; }
@@ -63,7 +66,7 @@ namespace ta {
                 bool hasPeer() const { return hasPeer_; }
 
                 // Pairing
-                bool startPairing(uint8_t groupId = ta::protocol::kPairGroupId, uint32_t timeoutMs = 30000);
+                bool startPairing(uint8_t groupId, uint32_t timeoutMs);
                 void cancelPairing();
                 bool isPairing() const { return pairing_; }
                 void setPairCallback(PairCallback cb, void* ctx) { pairCb_ = cb; pairCtx_ = ctx; }
@@ -112,7 +115,7 @@ namespace ta {
                 uint32_t pairingTimeoutAt_ = 0;
                 uint32_t nextPairReqAt_ = 0;
                 uint32_t pairReqIntervalMs_ = 500;
-                uint8_t pairingGroupId_ = ta::protocol::kPairGroupId;
+                uint8_t pairingGroupId_ = 0x01;
 
                 // Callback
                 StatusCallback cb_ = nullptr;

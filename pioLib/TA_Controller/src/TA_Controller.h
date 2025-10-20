@@ -1,12 +1,30 @@
 #pragma once
-#include <Arduino.h>
+#include <stdint.h>
 #include "TA_Protocol.h"
-#include "TA_Actuators.h"
+#include <TA_Errors.h>
 
 namespace ta {
+namespace act { class Actuators; }
 namespace ctl {
 
 enum class State { IDLE, AIRUP, VENTING, CHECKING, ERROR };
+
+// Keep internal enum but map values to shared catalog for wire/display compatibility
+enum class ErrorCode : uint8_t {
+  NONE = ta::errors::NONE,
+  NO_CHANGE = ta::errors::NO_CHANGE,
+  EXCESSIVE_TIME = ta::errors::EXCESSIVE_TIME,
+  // Additional internal codes can be added; default mapping uses raw byte
+  UNKNOWN = ta::errors::UNKNOWN
+};
+
+// Injectable outputs for unit testing or alternative drivers
+struct IOutputs {
+  virtual ~IOutputs() = default;
+  virtual void setCompressor(bool on) = 0;
+  virtual void setVent(bool open) = 0;
+  virtual void stopAll() = 0;
+};
 
 struct Config {
   float minPsi = 5.0f;
@@ -20,22 +38,20 @@ struct Config {
   unsigned long maxContinuousMs = 30UL * 60UL * 1000UL; // 30 minutes
   float noChangeEps = 0.02f;
   int maxNoChangeBursts = 3;
-};
-
-enum class ErrorCode : uint8_t {
-  NONE = 0,
-  NO_CHANGE = 1,
-  EXCESSIVE_TIME = 2,
-  UNKNOWN = 255
+  // Newly exposed tuning parameters (formerly magic numbers)
+  float aimMarginPsi = 0.2f;      // margin before final approach
+  float dPsiNoiseEps = 0.01f;     // noise threshold when computing rates
+  float rateMinEps = 0.001f;      // minimal rate to consider valid
+  float checkDtMinSec = 0.02f;    // minimal time window to consider (seconds)
 };
 
 class Controller {
 public:
-  void begin(ta::act::Actuators* act, const Config& cfg) {
-    act_ = act;
-    cfg_ = cfg;
-    reset_();
-  }
+  // Backward compatible: use board Actuators through adapter
+  void begin(ta::act::Actuators* act, const Config& cfg);
+
+  // New: directly inject an outputs implementation
+  void begin(IOutputs* outputs, const Config& cfg);
 
   void update(uint32_t nowMs, float currentPsi);
 
@@ -56,6 +72,11 @@ public:
   uint8_t errorByte() const { return (uint8_t)errorCode_; }
 
 private:
+  // Per-state handlers
+  void handleRunPhase_(State runState, uint32_t now);
+  void handleChecking_(uint32_t now);
+  void handleIdle_(uint32_t now);
+  
   void enter_(State s, uint32_t now);
   void stopOutputs_();
   void scheduleBurst_(State dir, unsigned long durMs, uint32_t now);
@@ -63,7 +84,16 @@ private:
 
   void reset_();
 
-  ta::act::Actuators* act_ = nullptr;
+  // Outputs
+  struct ActuatorAdapter : IOutputs {
+    ta::act::Actuators* hw = nullptr;
+    void setCompressor(bool on) override;
+    void setVent(bool open) override;
+    void stopAll() override;
+  } actAdapter_;
+
+  IOutputs* out_ = nullptr;
+
   Config cfg_{};
 
   State state_ = State::IDLE;

@@ -4,6 +4,8 @@
 #include "TA_CommsBoard.h"
 #include "TA_Input.h"
 #include "TA_Display.h"
+#include <TA_UI.h>
+#include <TA_Config.h>
 
 namespace ta {
   namespace stateboard {
@@ -11,14 +13,9 @@ namespace ta {
     class StateBoard {
     public:
       struct Config {
-        float minPsi = 0.0f;
-        float maxPsi = 50.0f;
-        float defaultTargetPsi = 32.0f;
-        uint32_t doneHoldMs = 1500;
-        uint32_t errorAutoClearMs = 4000;
-        uint32_t remoteTimeoutMs = 3000;
-        float stepPsiSmall = 1.0f;
-        float stepPsiLarge = 5.0f;
+        ta::cfg::UiShared ui;      // shared UI config
+        ta::cfg::LinkShared link;  // shared link config (timeouts, pairing)
+        float stepPsiLarge = 5.0f;       // optional extra step not used by shared UI
       };
 
       enum class UiState { Idle, Manual, Seeking, Error };
@@ -41,34 +38,36 @@ namespace ta {
                              const ta::comms::BoardLink& link,
                              uint32_t now) const;
 
-      float targetPsi() const { return targetPsi_; }
-      UiState uiState() const { return uiState_; }
+      float targetPsi() const { return ui_.targetPsi(); }
+      UiState uiState() const {
+        using V = ta::ui::View;
+        switch (ui_.view()) {
+          case V::Idle: return UiState::Idle;
+          case V::Manual: return UiState::Manual;
+          case V::Seeking: return UiState::Seeking;
+          case V::Error: return UiState::Error;
+          default: return UiState::Idle;
+        }
+      }
 
     private:
-      Config cfg_;
-      UiState uiState_ = UiState::Idle;
+      // Bridge concrete controller to shared UI actions
+      struct BoardActions : ta::ui::DeviceActions {
+        ta::ctl::Controller* ctl = nullptr;
+        bool isConnected() const override { return true; }
+        void cancel() override { if (ctl) ctl->cancel(); }
+        void clearError() override { if (ctl) ctl->clearError(); }
+        void startSeek(float targetPsi) override { if (ctl) ctl->startSeek(targetPsi); }
+        void manualVent(bool on) override { if (ctl) ctl->manualVent(on); }
+        void manualAirUp(bool on) override { if (ctl) ctl->manualAirUp(on); }
+      };
 
-      float targetPsi_ = 32.0f;
+      Config cfg_{};
+      ta::ui::UiStateMachine ui_{};
 
-      // Seeking / done-hold
-      bool seenSeekingActivity_ = false;
-      bool showDoneHold_ = false;
-      uint32_t doneHoldUntil_ = 0;
-
-      // Error auto-clear
-      uint32_t errorEntryMs_ = 0;
-
-      // Manual flags (while button held)
-      bool manualVentActive_ = false;
-      bool manualAirActive_ = false;
-
-      void clampTarget();
-      void enterManual(ta::ctl::Controller& controller);
-      void exitManual(ta::ctl::Controller& controller);
-      void startSeek(ta::ctl::Controller& controller);
-      void cancelSeek(ta::ctl::Controller& controller);
-      void handleControllerState(uint32_t now, ta::ctl::Controller& controller);
-      void handleErrorAutoClear(uint32_t now, ta::ctl::Controller& controller);
+      // helper conversions
+      static ta::ui::Ctrl toUiCtrl_(ta::ctl::State s);
+      static ta::ui::ButtonEvent toUiBtn_(const ta::input::Event& ev);
     };
 
   } // namespace stateboard

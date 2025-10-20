@@ -4,6 +4,8 @@
 #include <TA_Comms.h>
 #include <TA_Display.h>
 #include <TA_Input.h>
+#include <TA_UI.h>
+#include <TA_Config.h>
 
 namespace ta {
 namespace state {
@@ -12,14 +14,8 @@ enum class RemoteState { DISCONNECTED, IDLE, MANUAL, SEEKING, ERROR, PAIRING };
 enum class ControlState { IDLE, AIRUP, VENTING, CHECKING, ERROR };
 
 struct Config {
-  float minPsi = 20.0f;
-  float maxPsi = 45.0f;
-  float defaultTargetPsi = 25.0f;
-
-  uint32_t connectionHoldMs = 1000;  // show connected before leaving DISCONNECTED
-  uint32_t doneHoldMs = 2000;        // “Done!” display hold in SEEKING
-  uint32_t errorAutoClearMs = 5000;  // auto exit ERROR
-  uint32_t manualRepeatMs = 500;     // resend manual command
+  ta::cfg::UiShared ui;           // shared UI config
+  ta::cfg::LinkShared link;       // shared link config
 };
 
 class StateController {
@@ -51,20 +47,41 @@ public:
   RemoteState remoteState() const { return rState_; }
   ControlState controlState() const { return cState_; }
   float currentPsi() const { return currentPsi_; }
-  float targetPsi() const { return targetPsi_; }
+  float targetPsi() const { return ui_.targetPsi(); }
   uint8_t lastError() const { return lastErrorCode_; }
 
 private:
   void enter_(RemoteState s, uint32_t now);
-  void handleButtonsIdle_(const ta::input::Event& e, uint32_t now);
-  void handleButtonsManual_(const ta::input::Event& e, uint32_t now);
-  void handleButtonsSeeking_(const ta::input::Event& e, uint32_t now);
   void handleButtonsDisconnected_(const ta::input::Event& e, uint32_t now);
-  void handleButtonsError_(const ta::input::Event& e, uint32_t now);
+
+  // Device action bridge for UI layer
+  struct RemoteActions : ta::ui::DeviceActions {
+    StateController* self = nullptr;
+    bool isConnected() const override { return self ? self->isConnected_ : true; }
+    void cancel() override;
+    void clearError() override { cancel(); }
+    void startSeek(float targetPsi) override;
+    void manualVent(bool on) override;
+    void manualAirUp(bool on) override;
+  };
+
+  static inline ta::ui::Ctrl toUiCtrl(ControlState s) {
+    switch (s) {
+      case ControlState::IDLE: return ta::ui::Ctrl::Idle;
+      case ControlState::AIRUP: return ta::ui::Ctrl::AirUp;
+      case ControlState::VENTING: return ta::ui::Ctrl::Venting;
+      case ControlState::CHECKING: return ta::ui::Ctrl::Checking;
+      case ControlState::ERROR: return ta::ui::Ctrl::Error;
+    }
+    return ta::ui::Ctrl::Idle;
+  }
 
 private:
   ta::comms::EspNowLink& link_;
   Config cfg_;
+
+  // Shared UI state machine
+  ta::ui::UiStateMachine ui_{};
 
   // Domain state
   RemoteState rState_ = RemoteState::DISCONNECTED;
@@ -72,17 +89,11 @@ private:
   ControlState cState_ = ControlState::IDLE;
 
   float currentPsi_ = 0.0f;
-  float targetPsi_  = 25.0f;
-
-  bool seekingActiveSeen_ = false;
-  uint32_t seekingDoneUntil_ = 0;
-  uint32_t disconnectedHoldUntil_ = 0;
 
   // Manual
   bool manualSending_ = false;
   uint8_t manualCode_ = 0x00; // 0x00=vent, 0xFF=air
   uint32_t lastManualSentMs_ = 0;
-  uint32_t manualRepeatMs_ = 300;
 
   // Errors and battery
   uint8_t lastErrorCode_ = 0;

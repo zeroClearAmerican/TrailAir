@@ -5,7 +5,14 @@ namespace state {
 
 StateController::StateController(ta::comms::EspNowLink& link, const Config& cfg)
   : link_(link), cfg_(cfg) {
-  targetPsi_ = cfg_.defaultTargetPsi;
+  ta::ui::UiConfig uic;
+  uic.minPsi = cfg_.ui.minPsi;
+  uic.maxPsi = cfg_.ui.maxPsi;
+  uic.defaultTargetPsi = cfg_.ui.defaultTargetPsi;
+  uic.stepSmall = cfg_.ui.stepSmall;
+  uic.doneHoldMs = cfg_.ui.doneHoldMs;
+  uic.errorAutoClearMs = cfg_.ui.errorAutoClearMs;
+  ui_.begin(uic);
 }
 
 void StateController::begin() {
@@ -14,9 +21,6 @@ void StateController::begin() {
 }
 
 void StateController::resetAfterWake() {
-  seekingActiveSeen_ = false;
-  seekingDoneUntil_ = 0;
-  disconnectedHoldUntil_ = 0;
   suppressLeftClicksUntil_ = 0;
   leftSleepHold_ = false;
   leftLongHoldActive_ = false;   // clear latch after wake
@@ -51,26 +55,10 @@ void StateController::onStatus(const ta::protocol::StatusMsg& msg) {
     case Status::Error:    cState_ = ControlState::ERROR;    break;
   }
 
-  bool wasErrorView = (rState_ == RemoteState::ERROR);
-  // (existing switch already set cState_)
-  // If we were showing ERROR and board is now non-error, leave ERROR view
-  if (wasErrorView && msg.status != Status::Error) {
+  // Leave ERROR view when board recovers
+  if (rState_ == RemoteState::ERROR && msg.status != Status::Error) {
+    errorClearRequested_ = false; // allow future auto-clears
     enter_(RemoteState::IDLE, millis());
-  }
-
-  // SEEKING done hold trigger
-  if (rState_ == RemoteState::SEEKING) {
-    if (msg.status == Status::AirUp || msg.status == Status::Venting || msg.status == Status::Checking) {
-      seekingActiveSeen_ = true;
-    } else if (msg.status == Status::Idle && seekingActiveSeen_ && seekingDoneUntil_ == 0) {
-      seekingDoneUntil_ = millis() + cfg_.doneHoldMs;
-    }
-  }
-
-  // Enter ERROR screen when error reported
-  if (msg.status == Status::Error && rState_ != RemoteState::ERROR) {
-    errorClearRequested_ = false;     // new error, allow future auto-clear
-    enter_(RemoteState::ERROR, millis());
   }
 }
 
@@ -78,7 +66,7 @@ void StateController::update(uint32_t now, bool isConnected, bool isConnecting) 
   isConnected_ = isConnected;
   isConnecting_ = isConnecting;
 
-  // If in pairing failure hold, auto-exit after window
+  // Pairing failure hold auto-exit
   if (rState_ == RemoteState::PAIRING && pairingFailed_) {
     if (now >= pairingFailHoldUntil_ && pairingFailHoldUntil_ != 0) {
       pairingFailHoldUntil_ = 0;
@@ -86,79 +74,34 @@ void StateController::update(uint32_t now, bool isConnected, bool isConnecting) 
     }
   }
 
-  // Manual repeat refresh (keep board in manual mode)
-  if (rState_ == RemoteState::MANUAL && manualSending_) {
-    if (now - lastManualSentMs_ >= manualRepeatMs_) {
+  // Shared UI update (delegates error autoclear Cancel)
+  RemoteActions ra; ra.self = this;
+  ui_.update(now, ra, toUiCtrl(cState_));
+
+  // Keep rState_ aligned with shared view
+  switch (ui_.view()) {
+    case ta::ui::View::Idle:         rState_ = RemoteState::IDLE; break;
+    case ta::ui::View::Manual:       rState_ = RemoteState::MANUAL; break;
+    case ta::ui::View::Seeking:      rState_ = RemoteState::SEEKING; break;
+    case ta::ui::View::Error:        rState_ = RemoteState::ERROR; break;
+    case ta::ui::View::Disconnected: rState_ = RemoteState::DISCONNECTED; break;
+    case ta::ui::View::Pairing:      rState_ = RemoteState::PAIRING; break;
+  }
+
+  // Manual resend while truly in Manual
+  if (ui_.view() == ta::ui::View::Manual && manualSending_) {
+    if (now - lastManualSentMs_ >= cfg_.link.manualRepeatMs) {
       link_.sendManual(manualCode_);
       lastManualSentMs_ = now;
     }
   }
 
-  switch (rState_) {
-    case RemoteState::DISCONNECTED: {
-      if (isConnected_) {
-        if (disconnectedHoldUntil_ == 0) {
-          disconnectedHoldUntil_ = now + cfg_.connectionHoldMs;
-        }
-        if (now >= disconnectedHoldUntil_) {
-          disconnectedHoldUntil_ = 0;
-          enter_(RemoteState::IDLE, now);
-        }
-      } else {
-        disconnectedHoldUntil_ = 0;
-      }
-      break;
-    }
-
-    case RemoteState::IDLE: {
-      if (!isConnected_) {
-        enter_(RemoteState::DISCONNECTED, now);
-      }
-      break;
-    }
-
-    case RemoteState::MANUAL: {
-      if (!isConnected_) {
-        enter_(RemoteState::DISCONNECTED, now);
-        break;
-      }
-      if (manualSending_ && (now - lastManualSentMs_) >= cfg_.manualRepeatMs) {
-        link_.sendManual(manualCode_);
-        lastManualSentMs_ = now;
-      }
-      break;
-    }
-
-    case RemoteState::SEEKING: {
-      if (!isConnected_) {
-        enter_(RemoteState::DISCONNECTED, now);
-      } else if (cState_ == ControlState::ERROR) {
-        enter_(RemoteState::ERROR, now);
-      } else if (seekingDoneUntil_ != 0 && now >= seekingDoneUntil_) {
-        seekingDoneUntil_ = 0;
-        enter_(RemoteState::IDLE, now);
-      }
-      break;
-    }
-
-    case RemoteState::ERROR: {
-      // Automatically request board clear after timeout by sending Cancel once.
-      if (!errorClearRequested_ &&
-          (now - stateEntryMs_) >= cfg_.errorAutoClearMs) {
-        link_.sendCancel();           // asks board to clear error
-        errorClearRequested_ = true;
-      }
-      // (Remain in ERROR until board reports non-error status.)
-      break;
-    }
-
-    case RemoteState::PAIRING: {
-      // If user got paired (peer stored) but we are still in PAIRING (e.g. Saved event before Ack transition)
-      if (link_.hasPeer() && !link_.isPairing() && !pairingFailed_) {
-        enter_(RemoteState::DISCONNECTED, now);
-      }
-      break;
-    }
+  // If we left Manual due to error or other transitions, stop manual stream
+  if (ui_.view() != ta::ui::View::Manual && manualSending_) {
+    link_.sendCancel();
+    manualSending_ = false;
+    lastManualSentMs_ = 0;
+    manualCode_ = 0x00;
   }
 }
 
@@ -175,172 +118,81 @@ void StateController::enter_(RemoteState s, uint32_t now) {
     lastManualSentMs_ = 0;
     manualCode_ = 0x00;
   }
-
-  if (rState_ == RemoteState::SEEKING) {
-    seekingActiveSeen_ = false;
-    seekingDoneUntil_ = 0;
-  }
-  if (rState_ != RemoteState::ERROR) {
-    // Leaving error or entering other state resets flag
-    if (rPrev_ == RemoteState::ERROR)
-      errorClearRequested_ = false;
-  }
-  if (rState_ == RemoteState::ERROR) {
-    // ensure manual sending stops
-    if (manualSending_) {
-      link_.sendCancel();
-      manualSending_ = false;
-      lastManualSentMs_ = 0;
-      manualCode_ = 0x00;
-    }
+  
+  switch (rState_) {
+    case RemoteState::DISCONNECTED:
+      pairingFailed_ = false;
+      pairingBusy_ = false;
+      break;
+    case RemoteState::IDLE:
+      break;
+    case RemoteState::MANUAL:
+      break;
+    case RemoteState::SEEKING:
+      break;
+    case RemoteState::ERROR:
+      if (!errorClearRequested_) {
+        // Will be auto-cleared by UiStateMachine via DeviceActions::clearError()
+        errorClearRequested_ = true;
+      }
+      break;
+    case RemoteState::PAIRING:
+      pairingFailed_ = false;
+      pairingBusy_ = false;
+      break;
   }
 }
 
 void StateController::onButton(const ta::input::Event& e) {
   uint32_t now = millis();
 
+  // Left sleep long-hold handling remains remote-specific
   if (e.id == ta::input::ButtonId::Left) {
-    // Track physical press state
-    if (e.action == ta::input::Action::Pressed) {
-      leftPressed_ = true;
-    } else if (e.action == ta::input::Action::Released) {
-      leftPressed_ = false;
-    }
+    if (e.action == ta::input::Action::Pressed) leftPressed_ = true;
+    else if (e.action == ta::input::Action::Released) leftPressed_ = false;
 
     if (e.action == ta::input::Action::LongHold) {
       sleepRequested_ = true;
       leftLongHoldActive_ = true;
-      leftPressed_ = false;                 // treat as consumed
+      leftPressed_ = false;
       suppressLeftClicksUntil_ = now + 1500;
       return;
     }
-    if (leftLongHoldActive_) {
-      return; // swallow everything after long hold
-    }
-    // Suppress auto‑repeat clicks while still physically held
-    if (e.action == ta::input::Action::Click && leftPressed_) {
-      return;
-    }
-    // Existing suppression window
-    if ((e.action == ta::input::Action::Click || e.action == ta::input::Action::Released) &&
-        now < suppressLeftClicksUntil_) {
-      return;
-    }
+    if (leftLongHoldActive_) return; // swallow all following left events until wake
+    if (e.action == ta::input::Action::Click && leftPressed_) return; // ignore repeat clicks while held
+    if ((e.action == ta::input::Action::Click || e.action == ta::input::Action::Released) && now < suppressLeftClicksUntil_) return;
   }
 
-  // Disconnected pairing / reconnect
-  if (rState_ == RemoteState::DISCONNECTED &&
-      e.id == ta::input::ButtonId::Right &&
-      e.action == ta::input::Action::Click) {
-    if (canStartPairing()) link_.startPairing();
-    else link_.requestReconnect();
+  // Disconnected & Pairing shortcuts remain remote-specific
+  if (rState_ == RemoteState::DISCONNECTED && e.id == ta::input::ButtonId::Right && e.action == ta::input::Action::Click) {
+    if (canStartPairing()) link_.startPairing(cfg_.link.pairGroupId, cfg_.link.pairTimeoutMs); else link_.requestReconnect();
     return;
   }
-
   if (rState_ == RemoteState::PAIRING) {
     if (e.id == ta::input::ButtonId::Right && e.action == ta::input::Action::Click) {
       if (link_.isPairing()) link_.cancelPairing();
-      else if (pairingFailed_ && canStartPairing()) link_.startPairing();
+      else if (pairingFailed_ && canStartPairing()) link_.startPairing(cfg_.link.pairGroupId, cfg_.link.pairTimeoutMs);
     }
     return;
   }
 
-  switch (rState_) {
-    case RemoteState::DISCONNECTED: handleButtonsDisconnected_(e, now); break;
-    case RemoteState::IDLE:         handleButtonsIdle_(e, now);         break;
-    case RemoteState::MANUAL:       handleButtonsManual_(e, now);       break;
-    case RemoteState::SEEKING:      handleButtonsSeeking_(e, now);      break;
-    case RemoteState::ERROR:        handleButtonsError_(e, now);        break;
-    case RemoteState::PAIRING:      break;
-  }
+  // Delegate to shared UI machine
+  RemoteActions ra; ra.self = this;
+  ta::ui::ButtonEvent be{
+    e.id == ta::input::ButtonId::Left ? ta::ui::Button::Left :
+    e.id == ta::input::ButtonId::Down ? ta::ui::Button::Down :
+    e.id == ta::input::ButtonId::Up   ? ta::ui::Button::Up   : ta::ui::Button::Right,
+    e.action == ta::input::Action::Pressed ? ta::ui::Action::Pressed :
+    e.action == ta::input::Action::Released? ta::ui::Action::Released:
+    e.action == ta::input::Action::Click   ? ta::ui::Action::Click   : ta::ui::Action::LongHold
+  };
+  ui_.onButton(be, ra);
+
+  // rState_ will be synced in update(); no need to mutate here.
 }
 
 void StateController::handleButtonsDisconnected_(const ta::input::Event& e, uint32_t /*now*/) {
   (void)e;
-  // No direct actions here now; Right click logic moved to onButton()
-}
-
-void StateController::handleButtonsIdle_(const ta::input::Event& e, uint32_t /*now*/) {
-  if (e.action == ta::input::Action::Click) {
-    if (e.id == ta::input::ButtonId::Left) {
-      // enter manual
-      lastManualSentMs_ = 0;
-      manualSending_ = false;
-      manualCode_ = 0x00;
-      enter_(RemoteState::MANUAL, millis());
-    } else if (e.id == ta::input::ButtonId::Down) {
-      targetPsi_ -= 1.0f;
-      if (targetPsi_ < cfg_.minPsi) targetPsi_ = cfg_.minPsi;
-    } else if (e.id == ta::input::ButtonId::Up) {
-      targetPsi_ += 1.0f;
-      if (targetPsi_ > cfg_.maxPsi) targetPsi_ = cfg_.maxPsi;
-    } else if (e.id == ta::input::ButtonId::Right) {
-      link_.sendStart(targetPsi_);
-      enter_(RemoteState::SEEKING, millis());
-    }
-  }
-}
-
-void StateController::handleButtonsManual_(const ta::input::Event& e, uint32_t now) {
-  // Exit manual
-  if (e.id == ta::input::ButtonId::Left && e.action == ta::input::Action::Click) {
-    if (manualSending_) {
-      link_.sendCancel();
-      manualSending_ = false;
-    }
-    enter_(RemoteState::IDLE, now);
-    return;
-  }
-
-  // Vent (Down)
-  if (e.id == ta::input::ButtonId::Down) {
-    if (e.action == ta::input::Action::Pressed && !manualSending_) {
-      manualCode_ = 0x00; // vent
-      manualSending_ = true;
-      lastManualSentMs_ = now;
-      link_.sendManual(manualCode_);
-    } else if (e.action == ta::input::Action::Released && manualSending_ && manualCode_ == 0x00) {
-      manualSending_ = false;
-      link_.sendCancel();
-    }
-    return;
-  }
-
-  // Air Up (Up)
-  if (e.id == ta::input::ButtonId::Up) {
-    if (e.action == ta::input::Action::Pressed && !manualSending_) {
-      manualCode_ = 0xFF; // air
-      manualSending_ = true;
-      lastManualSentMs_ = now;
-      link_.sendManual(manualCode_);
-    } else if (e.action == ta::input::Action::Released && manualSending_ && manualCode_ == 0xFF) {
-      manualSending_ = false;
-      link_.sendCancel();
-    }
-    return;
-  }
-}
-
-void StateController::handleButtonsSeeking_(const ta::input::Event& e, uint32_t /*now*/) {
-  if (e.id == ta::input::ButtonId::Right && e.action == ta::input::Action::Click) {
-    link_.sendCancel();
-  }
-}
-
-void StateController::handleButtonsError_(const ta::input::Event& e, uint32_t now) {
-  if (e.id == ta::input::ButtonId::Right && e.action == ta::input::Action::Click) {
-    // Send Idle/Cancel command to ask board to clear error.
-    link_.sendCancel();          // (Assumes sendCancel() transmits Cmd::Idle)
-    // Do NOT leave ERROR yet; wait for non-error status frame.
-    // Optionally give brief user feedback (e.g. flash icon) here.
-    (void)now;
-  }
-  if (e.id == ta::input::ButtonId::Right && e.action == ta::input::Action::Click) {
-    if (!errorClearRequested_) {
-      link_.sendCancel();
-      errorClearRequested_ = true;
-    }
-  }
 }
 
 void StateController::buildDisplayModel(ta::display::DisplayModel& dm) const {
@@ -356,9 +208,9 @@ void StateController::buildDisplayModel(ta::display::DisplayModel& dm) const {
   }
 
   dm.currentPSI = currentPsi_;
-  dm.targetPSI  = targetPsi_;
+  dm.targetPSI  = ui_.targetPsi();
   dm.lastErrorCode = lastErrorCode_;
-  dm.seekingShowDoneHold = (rState_ == RemoteState::SEEKING) && (seekingDoneUntil_ != 0);
+  dm.seekingShowDoneHold = ui_.isDoneHoldActive(millis());
   dm.showReconnectHint = (!isConnecting_);
 
   // Pairing flags
@@ -366,13 +218,13 @@ void StateController::buildDisplayModel(ta::display::DisplayModel& dm) const {
   dm.pairingFailed = (rState_ == RemoteState::PAIRING) && pairingFailed_;
   dm.pairingBusy   = (rState_ == RemoteState::PAIRING) && pairingBusy_;
 
-  switch (rState_) {
-    case RemoteState::DISCONNECTED: dm.view = ta::display::View::Disconnected; break;
-    case RemoteState::IDLE:         dm.view = ta::display::View::Idle;         break;
-    case RemoteState::MANUAL:       dm.view = ta::display::View::Manual;       break;
-    case RemoteState::SEEKING:      dm.view = ta::display::View::Seeking;      break;
-    case RemoteState::ERROR:        dm.view = ta::display::View::Error;        break;
-    case RemoteState::PAIRING:      dm.view = ta::display::View::Pairing;      break;
+  switch (ui_.view()) {
+    case ta::ui::View::Disconnected: dm.view = ta::display::View::Disconnected; break;
+    case ta::ui::View::Idle:         dm.view = ta::display::View::Idle;         break;
+    case ta::ui::View::Manual:       dm.view = ta::display::View::Manual;       break;
+    case ta::ui::View::Seeking:      dm.view = ta::display::View::Seeking;      break;
+    case ta::ui::View::Error:        dm.view = ta::display::View::Error;        break;
+    case ta::ui::View::Pairing:      dm.view = ta::display::View::Pairing;      break;
   }
 }
 
@@ -386,11 +238,10 @@ void StateController::onPairEvent(ta::comms::PairEvent ev, const uint8_t* /*mac*
       pairingFailed_ = false;
       pairingBusy_ = false;
       pairingFailHoldUntil_ = 0;
-      enter_(RemoteState::PAIRING, millis());
+      rState_ = RemoteState::PAIRING;
       break;
     case ta::comms::PairEvent::Acked:
-      // Successfully paired -> transition to DISCONNECTED (will auto-connect)
-      enter_(RemoteState::DISCONNECTED, millis());
+      rState_ = RemoteState::DISCONNECTED;
       break;
     case ta::comms::PairEvent::Busy:
       pairingBusy_ = true;
@@ -407,6 +258,45 @@ void StateController::onPairEvent(ta::comms::PairEvent ev, const uint8_t* /*mac*
     case ta::comms::PairEvent::Cleared:
     default:
       break;
+  }
+}
+
+// RemoteActions implementations
+void StateController::RemoteActions::cancel() {
+  if (!self) return;
+  // Avoid spamming cancel while in ERROR; send once per error occurrence
+  if (self->cState_ == ControlState::ERROR) {
+    if (!self->errorClearRequested_) {
+      self->link_.sendCancel();
+      self->errorClearRequested_ = true;
+    }
+  } else {
+    self->link_.sendCancel();
+  }
+}
+void StateController::RemoteActions::startSeek(float targetPsi) { if (self) self->link_.sendStart(targetPsi); }
+void StateController::RemoteActions::manualVent(bool on) {
+  if (!self) return;
+  if (on && !self->manualSending_) {
+    self->manualCode_ = 0x00;
+    self->manualSending_ = true;
+    self->lastManualSentMs_ = millis();
+    self->link_.sendManual(self->manualCode_);
+  } else if (!on && self->manualSending_ && self->manualCode_ == 0x00) {
+    self->manualSending_ = false;
+    self->link_.sendCancel();
+  }
+}
+void StateController::RemoteActions::manualAirUp(bool on) {
+  if (!self) return;
+  if (on && !self->manualSending_) {
+    self->manualCode_ = 0xFF;
+    self->manualSending_ = true;
+    self->lastManualSentMs_ = millis();
+    self->link_.sendManual(self->manualCode_);
+  } else if (!on && self->manualSending_ && self->manualCode_ == 0xFF) {
+    self->manualSending_ = false;
+    self->link_.sendCancel();
   }
 }
 

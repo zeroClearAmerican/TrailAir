@@ -88,25 +88,87 @@ namespace ta {
         }
 
         void TA_Display::drawButtonHints_(const uint8_t* left, const uint8_t* down, const uint8_t* up, const uint8_t* right) {
-            const int iconSize = 6;
+            const int iconSize = style_.btnIcon;
             const int cellW = 32;
             const int y = d_.height() - iconSize;
             const int offset = (cellW - iconSize) / 2;
-
             if (left)  d_.drawBitmap(0   + offset, y, left,  iconSize, iconSize, SSD1306_WHITE);
             if (down)  d_.drawBitmap(32  + offset, y, down,  iconSize, iconSize, SSD1306_WHITE);
             if (up)    d_.drawBitmap(64  + offset, y, up,    iconSize, iconSize, SSD1306_WHITE);
             if (right) d_.drawBitmap(96  + offset, y, right, iconSize, iconSize, SSD1306_WHITE);
         }
 
+        // Layout helpers
+        int TA_Display::topSafe_() const { return style_.statusRowH; }
+
+        void TA_Display::measure_(const String& s, uint8_t size, int16_t& w, int16_t& h) {
+            int16_t bx, by; uint16_t bw, bh;
+            d_.setTextSize(size);
+            d_.getTextBounds(s, 0, 0, &bx, &by, &bw, &bh);
+            w = (int16_t)bw; h = (int16_t)bh;
+        }
+        int TA_Display::centerX_(int w) const { return (d_.width() - w) / 2; }
+        int TA_Display::centerYBetween_(int h, int top, int bottom) const {
+            int avail = bottom - top; return top + (avail - h) / 2;
+        }
+        void TA_Display::drawCenteredText_(const String& s, uint8_t size, int y) {
+            int16_t w, h; measure_(s, size, w, h);
+            int x = centerX_(w);
+            d_.setTextSize(size);
+            d_.setTextColor(SSD1306_WHITE);
+            d_.setCursor(x, y);
+            d_.print(s);
+        }
+        void TA_Display::drawTwoLineCentered_(const String& top, uint8_t topSize,
+                                              const String& bottom, uint8_t bottomSize,
+                                              int spacing, int topClamp) {
+            int16_t w1, h1, w2, h2;
+            measure_(top, topSize, w1, h1);
+            measure_(bottom, bottomSize, w2, h2);
+            int totalH = h1 + spacing + h2;
+            int yStart = centerYBetween_(totalH, topClamp, d_.height());
+            if (yStart < topClamp) yStart = topClamp;
+            d_.setTextColor(SSD1306_WHITE);
+            d_.setTextSize(topSize);
+            d_.setCursor(centerX_(w1), yStart);
+            d_.print(top);
+            d_.setTextSize(bottomSize);
+            d_.setCursor(centerX_(w2), yStart + h1 + spacing);
+            d_.print(bottom);
+        }
+
+        void TA_Display::drawTwoColumnValues_(const String& left, const String& right, uint8_t textSize, uint8_t gap) {
+            d_.setTextColor(SSD1306_WHITE);
+            int16_t lw, lh, rw, rh;
+            measure_(left, textSize, lw, lh);
+            measure_(right, textSize, rw, rh);
+            int centerY = centerYBetween_(lh, topSafe_(), d_.height());
+            int mid = d_.width() / 2;
+            // Left cell
+            int l0 = 0, l1 = mid - gap/2;
+            int r0 = mid + gap/2, r1 = d_.width();
+            int lx = l0 + (l1 - l0 - lw) / 2; if (lx < l0) lx = l0;
+            int rx = r0 + (r1 - r0 - rw) / 2; if (rx < r0) rx = r0;
+            d_.setTextSize(textSize);
+            d_.setCursor(lx, centerY); d_.print(left);
+            d_.setCursor(rx, centerY); d_.print(right);
+            // Underline right
+            int underlineY = centerY + rh;
+            if (underlineY < d_.height()) d_.drawLine(rx, underlineY, rx + rw, underlineY, SSD1306_WHITE);
+            // Direction arrow between columns
+            int ax = mid - 5;
+            int ay = d_.height() / 2;
+            d_.fillTriangle(ax, ay - 5, ax, ay + 5, ax + 9, ay, SSD1306_WHITE);
+        }
+
         void TA_Display::drawDisconnected(const DisplayModel& m) {
             drawBatteryIcon_(m.batteryPercent);
 
-            // Centered 20x20 icon
+            // Center 20x20 icon using helpers, keeping top status row clear
             const uint8_t* bmp = (m.link == Link::Connected) ? Icons::icon_connected_20x20 : Icons::icon_disconnected_20x20;
-            const uint8_t w = 20, h = 20;
-            const int16_t x = (d_.width()  - w) / 2;
-            const int16_t y = (d_.height() - h) / 2;
+            const int w = 20, h = 20;
+            const int x = centerX_(w);
+            const int y = centerYBetween_(h, topSafe_(), d_.height());
             d_.drawBitmap(x, y, bmp, w, h, SSD1306_WHITE);
 
             // Right button hint (retry) when disconnected
@@ -118,45 +180,10 @@ namespace ta {
         void TA_Display::drawIdle(const DisplayModel& m) {
             drawBatteryIcon_(m.batteryPercent);
             drawConnectionIcon_(m.link);
-
-            // Hints: Left=manual, Down=decrease, Up=increase, Right=start
             drawButtonHints_(Icons::icon_manual_control_6x6, Icons::icon_dash_6x6, Icons::icon_plus_6x6, Icons::icon_arrow_right_6x6);
-
             String currentStr = String((int)m.currentPSI);
             String targetStr  = String((int)m.targetPSI);
-
-            d_.setTextColor(SSD1306_WHITE);
-            d_.setTextSize(2);
-
-            int16_t bx, by; uint16_t bw, bh;
-            d_.getTextBounds(currentStr, 0, 0, &bx, &by, &bw, &bh);
-            uint16_t curW = bw, curH = bh;
-            d_.getTextBounds(targetStr, 0, 0, &bx, &by, &bw, &bh);
-            uint16_t tgtW = bw, tgtH = bh;
-
-            int leftX0 = 0, leftX1 = (d_.width() / 2) - 8;
-            int rightX0 = (d_.width() / 2) + 8, rightX1 = d_.width();
-            int centerY = (d_.height() - 16) / 2;
-            if (centerY < 0) centerY = 0;
-
-            int curX = leftX0 + (leftX1 - leftX0 - (int)curW) / 2;
-            if (curX < 0) curX = 0;
-            d_.setCursor(curX, centerY);
-            d_.print(currentStr);
-
-            int tgtX = rightX0 + (rightX1 - rightX0 - (int)tgtW) / 2;
-            if (tgtX < rightX0) tgtX = rightX0;
-            d_.setCursor(tgtX, centerY);
-            d_.print(targetStr);
-
-            int underlineY = centerY + (int)tgtH;
-            if (underlineY < d_.height()) {
-                d_.drawLine(tgtX, underlineY, tgtX + (int)tgtW, underlineY, SSD1306_WHITE);
-            }
-
-            int ax = (d_.width() / 2) - 5;
-            int ay = d_.height() / 2;
-            d_.fillTriangle(ax, ay - 5, ax, ay + 5, ax + 9, ay, SSD1306_WHITE);
+            drawTwoColumnValues_(currentStr, targetStr, style_.valueTextSize, style_.colGap);
         }
 
         void TA_Display::drawSeeking(const DisplayModel& m) {
@@ -167,16 +194,7 @@ namespace ta {
             drawButtonHints_(nullptr, nullptr, nullptr, Icons::icon_cancel_6x6);
 
             if (m.seekingShowDoneHold) {
-                const char* doneTxt = "Done!";
-                d_.setTextColor(SSD1306_WHITE);
-                d_.setTextSize(2);
-                int16_t bx, by; uint16_t bw, bh;
-                d_.getTextBounds(doneTxt, 0, 0, &bx, &by, &bw, &bh);
-                int x = (d_.width() - (int)bw) / 2;
-                int y = (d_.height() - (int)bh) / 2;
-                if (y < 8) y = 8;
-                d_.setCursor(x, y);
-                d_.print(doneTxt);
+                drawCenteredText_("Done!", 2, centerYBetween_(0, topSafe_(), d_.height()));
                 return;
             }
 
@@ -190,28 +208,7 @@ namespace ta {
             }
 
             String psiStr = String((int)m.currentPSI) + " PSI";
-
-            int16_t bx, by; uint16_t bw1, bh1, bw2, bh2;
-            d_.setTextColor(SSD1306_WHITE);
-            d_.setTextSize(1);
-            d_.getTextBounds(verb, 0, 0, &bx, &by, &bw1, &bh1);
-            d_.setTextSize(2);
-            d_.getTextBounds(psiStr, 0, 0, &bx, &by, &bw2, &bh2);
-
-            int totalH = (int)bh1 + 2 + (int)bh2;
-            int yStart = (d_.height() - totalH) / 2;
-            if (yStart < 8) yStart = 8;
-
-            int xVerb = (d_.width() - (int)bw1) / 2;
-            d_.setTextSize(1);
-            d_.setCursor(xVerb, yStart);
-            d_.print(verb);
-
-            int xPSI = (d_.width() - (int)bw2) / 2;
-            int yPSI = yStart + (int)bh1 + 2;
-            d_.setTextSize(2);
-            d_.setCursor(xPSI, yPSI);
-            d_.print(psiStr);
+            drawTwoLineCentered_(verb, 1, psiStr, 2, 2, topSafe_());
         }
 
         void TA_Display::drawManual(const DisplayModel& m) {
@@ -225,29 +222,11 @@ namespace ta {
             if (m.ctrl == Ctrl::AirUp) txt = "Inflating...";
             else if (m.ctrl == Ctrl::Venting) txt = "Deflating...";
 
-            d_.setTextColor(SSD1306_WHITE);
-            d_.setTextSize(1);
-            int16_t bx, by; uint16_t bw, bh;
-            d_.getTextBounds(txt, 0, 0, &bx, &by, &bw, &bh);
-            int x = (d_.width() - (int)bw) / 2;
-            int y = (d_.height() - (int)bh) / 2;
-            if (y < 8) y = 8;
-            d_.setCursor(x, y);
-            d_.print(txt);
+            drawCenteredText_(txt, 1, centerYBetween_(0, topSafe_(), d_.height()));
         }
 
         const char* TA_Display::shortError_(uint8_t code) const {
-            switch (code) {
-                case 0:   return "None";
-                case 1:   return "No change";
-                case 2:   return "Too slow";
-                case 3:   return "Sensor";
-                case 4:   return "Over PSI";
-                case 5:   return "Under PSI";
-                case 6:   return "Conflict";
-                case 255: return "Unknown";
-                default:  return "Error";
-            }
+            return ta::errors::shortText(code);
         }
 
         void TA_Display::drawError(const DisplayModel& m) {
@@ -264,19 +243,10 @@ namespace ta {
                 msg += String((int)m.lastErrorCode);
             }
 
-            d_.setTextColor(SSD1306_WHITE);
-            d_.setTextSize(2);
-            int16_t bx, by; uint16_t bw, bh;
-            d_.getTextBounds(msg, 0, 0, &bx, &by, &bw, &bh);
-            if (bw > d_.width()) {
-                d_.setTextSize(1);
-                d_.getTextBounds(msg, 0, 0, &bx, &by, &bw, &bh);
-            }
-            int x = (d_.width() - (int)bw) / 2;
-            int y = (d_.height() - (int)bh) / 2;
-            if (y < 8) y = 8;
-            d_.setCursor(x, y);
-            d_.print(msg);
+            // Auto-size large, fallback to small
+            int16_t w, h; measure_(msg, 2, w, h);
+            uint8_t size = (w > d_.width()) ? 1 : 2;
+            drawCenteredText_(msg, size, centerYBetween_(0, topSafe_(), d_.height()));
         }
 
         void TA_Display::drawPairing(const DisplayModel& m) {
@@ -284,9 +254,6 @@ namespace ta {
             // No connection icon: pairing precedes link
             // Right button = cancel
             drawButtonHints_(nullptr, nullptr, nullptr, Icons::icon_cancel_6x6);
-
-            d_.setTextColor(SSD1306_WHITE);
-            d_.setTextSize(1);
 
             const char* line = "Pairing";
             if (m.pairingFailed) {
@@ -301,13 +268,7 @@ namespace ta {
                 line = buf;
             }
 
-            int16_t bx, by; uint16_t bw, bh;
-            d_.getTextBounds(line, 0, 0, &bx, &by, &bw, &bh);
-            int x = (d_.width() - (int)bw) / 2;
-            int y = (d_.height() - (int)bh) / 2;
-            if (y < 8) y = 8;
-            d_.setCursor(x, y);
-            d_.print(line);
+            drawCenteredText_(line, 1, centerYBetween_(0, topSafe_(), d_.height()));
         }
     } // namespace display
 } // namespace ta

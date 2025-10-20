@@ -3,153 +3,85 @@
 using namespace ta::stateboard;
 
 void StateBoard::begin() {
-  Config def;
-  begin(def);
+  Config def; begin(def);
 }
 
 void StateBoard::begin(const Config& cfg) {
   cfg_ = cfg;
-  targetPsi_ = cfg_.defaultTargetPsi;
-  clampTarget();
+  ta::ui::UiConfig uicfg;
+  uicfg.minPsi = cfg_.ui.minPsi;
+  uicfg.maxPsi = cfg_.ui.maxPsi;
+  uicfg.defaultTargetPsi = cfg_.ui.defaultTargetPsi;
+  uicfg.stepSmall = cfg_.ui.stepSmall;
+  uicfg.doneHoldMs = cfg_.ui.doneHoldMs;
+  uicfg.errorAutoClearMs = cfg_.ui.errorAutoClearMs;
+  ui_.begin(uicfg);
 }
 
-void StateBoard::clampTarget() {
-  if (targetPsi_ < cfg_.minPsi) targetPsi_ = cfg_.minPsi;
-  if (targetPsi_ > cfg_.maxPsi) targetPsi_ = cfg_.maxPsi;
+static ta::ui::Ctrl mapCtrl(ta::ctl::State s) {
+  switch (s) {
+    case ta::ctl::State::IDLE: return ta::ui::Ctrl::Idle;
+    case ta::ctl::State::AIRUP: return ta::ui::Ctrl::AirUp;
+    case ta::ctl::State::VENTING: return ta::ui::Ctrl::Venting;
+    case ta::ctl::State::CHECKING: return ta::ui::Ctrl::Checking;
+    case ta::ctl::State::ERROR: return ta::ui::Ctrl::Error;
+  }
+  return ta::ui::Ctrl::Idle;
 }
 
-void StateBoard::enterManual(ta::ctl::Controller& controller) {
-  uiState_ = UiState::Manual;
-  manualVentActive_ = false;
-  manualAirActive_ = false;
-  controller.cancel(); // ensure no seek continues
+ta::ui::Ctrl StateBoard::toUiCtrl_(ta::ctl::State s) { return mapCtrl(s); }
+
+static ta::ui::Button toBtn(ta::input::ButtonId id) {
+  switch (id) {
+    case ta::input::ButtonId::Left: return ta::ui::Button::Left;
+    case ta::input::ButtonId::Down: return ta::ui::Button::Down;
+    case ta::input::ButtonId::Up:   return ta::ui::Button::Up;
+    case ta::input::ButtonId::Right:return ta::ui::Button::Right;
+  }
+  return ta::ui::Button::Left;
 }
 
-void StateBoard::exitManual(ta::ctl::Controller& controller) {
-  if (manualVentActive_) controller.manualVent(false);
-  if (manualAirActive_) controller.manualAirUp(false);
-  manualVentActive_ = manualAirActive_ = false;
-  uiState_ = UiState::Idle;
+static ta::ui::Action toAct(ta::input::Action a) {
+  switch (a) {
+    case ta::input::Action::Pressed: return ta::ui::Action::Pressed;
+    case ta::input::Action::Released:return ta::ui::Action::Released;
+    case ta::input::Action::Click:   return ta::ui::Action::Click;
+    case ta::input::Action::LongHold:return ta::ui::Action::LongHold;
+  }
+  return ta::ui::Action::Click;
 }
 
-void StateBoard::startSeek(ta::ctl::Controller& controller) {
-  controller.startSeek(targetPsi_);
-  uiState_ = UiState::Seeking;
-  seenSeekingActivity_ = false;
-  showDoneHold_ = false;
-}
-
-void StateBoard::cancelSeek(ta::ctl::Controller& controller) {
-  controller.cancel();
-  uiState_ = UiState::Idle;
-  showDoneHold_ = false;
+ta::ui::ButtonEvent StateBoard::toUiBtn_(const ta::input::Event& ev) {
+  return ta::ui::ButtonEvent{ toBtn(ev.id), toAct(ev.action) };
 }
 
 void StateBoard::onButton(const ta::input::Event& ev, ta::ctl::Controller& controller) {
-  using ta::input::ButtonId;
-  using ta::input::Action;
-
-  ButtonId btn = ev.id;
-  Action act = ev.action;
-
-  if (act == Action::Click) {
-    if (uiState_ == UiState::Idle) {
-      if (btn == ButtonId::Left)       { enterManual(controller); }
-      else if (btn == ButtonId::Right) { startSeek(controller); }
-      else if (btn == ButtonId::Up)    { targetPsi_ += cfg_.stepPsiSmall; clampTarget(); }
-      else if (btn == ButtonId::Down)  { targetPsi_ -= cfg_.stepPsiSmall; clampTarget(); }
-    } else if (uiState_ == UiState::Manual) {
-      if (btn == ButtonId::Left) { exitManual(controller); }
-    } else if (uiState_ == UiState::Seeking) {
-      if (btn == ButtonId::Right) { cancelSeek(controller); }
-    } else if (uiState_ == UiState::Error) {
-      if (btn == ButtonId::Right) { controller.clearError(); uiState_ = UiState::Idle; }
-    }
-  } else if (act == Action::LongHold) {
-    // (No long-hold actions on control board)
-  } else if (act == Action::Pressed) {
-    if (uiState_ == UiState::Manual) {
-      if (btn == ButtonId::Down && !manualVentActive_) {
-        controller.manualVent(true); manualVentActive_ = true;
-      } else if (btn == ButtonId::Up && !manualAirActive_) {
-        controller.manualAirUp(true); manualAirActive_ = true;
-      }
-    }
-  } else if (act == Action::Released) {
-    if (uiState_ == UiState::Manual) {
-      if (btn == ButtonId::Down && manualVentActive_) {
-        controller.manualVent(false); manualVentActive_ = false;
-      } else if (btn == ButtonId::Up && manualAirActive_) {
-        controller.manualAirUp(false); manualAirActive_ = false;
-      }
-    }
-  }
-}
-
-void StateBoard::handleControllerState(uint32_t now, ta::ctl::Controller& controller) {
-  using CS = ta::ctl::State;
-  CS cs = controller.state();
-  if (cs == CS::ERROR) {
-    if (uiState_ != UiState::Error) {
-      uiState_ = UiState::Error;
-      errorEntryMs_ = now;
-    }
-    return;
-  }
-
-  if (uiState_ == UiState::Seeking) {
-    if (cs == CS::AIRUP || cs == CS::VENTING || cs == CS::CHECKING) {
-      seenSeekingActivity_ = true;
-    }
-    if (cs == CS::IDLE && seenSeekingActivity_) {
-      // Completed
-      showDoneHold_ = true;
-      doneHoldUntil_ = now + cfg_.doneHoldMs;
-      uiState_ = UiState::Idle; // base state now idle; done hold flag drives display
-    }
-  }
-
-  if (uiState_ == UiState::Error && cs != CS::ERROR) {
-    uiState_ = UiState::Idle;
-  }
-
-  if (showDoneHold_ && now >= doneHoldUntil_) {
-    showDoneHold_ = false;
-  }
-}
-
-void StateBoard::handleErrorAutoClear(uint32_t now, ta::ctl::Controller& controller) {
-  if (uiState_ == UiState::Error) {
-    if (now - errorEntryMs_ >= cfg_.errorAutoClearMs) {
-      controller.clearError();
-      uiState_ = UiState::Idle;
-    }
-  }
+  BoardActions act; act.ctl = &controller;
+  ui_.onButton(toUiBtn_(ev), act);
 }
 
 void StateBoard::update(uint32_t now,
                         ta::ctl::Controller& controller,
                         const ta::comms::BoardLink& link) {
-  (void)link; // currently only used for icon; kept for future logic
-  handleControllerState(now, controller);
-  handleErrorAutoClear(now, controller);
+  (void)link;
+  BoardActions act; act.ctl = &controller;
+  ui_.update(now, act, toUiCtrl_(controller.state()));
 }
 
 void StateBoard::buildDisplayModel(ta::display::DisplayModel& m,
                                    const ta::ctl::Controller& controller,
                                    const ta::comms::BoardLink& link,
                                    uint32_t now) const {
-
-  // PSI values
+  // PSI
   m.currentPSI = controller.currentPsi();
-  m.targetPSI  = targetPsi_;
+  m.targetPSI  = ui_.targetPsi();
 
-  // Connection (icon only)
-  m.link = (link.isPaired() && link.isRemoteActive())
+  // Link icon
+  m.link = (link.isPaired() && link.isRemoteActive(cfg_.link.remoteActiveTimeoutMs))
           ? ta::display::Link::Connected
           : ta::display::Link::Disconnected;
 
-  // Controller activity -> Ctrl
+  // Ctrl
   switch (controller.state()) {
     case ta::ctl::State::IDLE:     m.ctrl = ta::display::Ctrl::Idle; break;
     case ta::ctl::State::AIRUP:    m.ctrl = ta::display::Ctrl::AirUp; break;
@@ -158,16 +90,18 @@ void StateBoard::buildDisplayModel(ta::display::DisplayModel& m,
     case ta::ctl::State::ERROR:    m.ctrl = ta::display::Ctrl::Error; break;
   }
 
-  // View
-  switch (uiState_) {
-    case UiState::Idle:    m.view = ta::display::View::Idle; break;
-    case UiState::Manual:  m.view = ta::display::View::Manual; break;
-    case UiState::Seeking: m.view = ta::display::View::Seeking; break;
-    case UiState::Error:   m.view = ta::display::View::Error; break;
+  // View mapping
+  switch (ui_.view()) {
+    case ta::ui::View::Idle:         m.view = ta::display::View::Idle; break;
+    case ta::ui::View::Manual:       m.view = ta::display::View::Manual; break;
+    case ta::ui::View::Seeking:      m.view = ta::display::View::Seeking; break;
+    case ta::ui::View::Error:        m.view = ta::display::View::Error; break;
+    case ta::ui::View::Disconnected: m.view = ta::display::View::Idle; break; // board never disconnected view
+    case ta::ui::View::Pairing:      m.view = ta::display::View::Idle; break;
   }
 
-  // Done-hold (Seeking “Done!” flash)
-  m.seekingShowDoneHold = showDoneHold_ && now < doneHoldUntil_;
+  // Done hold
+  m.seekingShowDoneHold = ui_.isDoneHoldActive(now);
 
   // Error code
   if (controller.state() == ta::ctl::State::ERROR) {
@@ -176,7 +110,7 @@ void StateBoard::buildDisplayModel(ta::display::DisplayModel& m,
     m.lastErrorCode = 0;
   }
 
-  // Fields unused on board
+  // Unused
   m.batteryPercent = 0;
   m.showReconnectHint = false;
   m.pairingActive = false;

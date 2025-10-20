@@ -9,15 +9,9 @@
 namespace ta {
 namespace comms {
 
-enum class CmdType { Idle, Seek, Manual, Ping, Unknown };
+using ta::protocol::Request;
 
-struct Command {
-  CmdType type = CmdType::Unknown;
-  float targetPsi = 0;
-  uint8_t raw = 0;
-};
-
-typedef void (*CommandCallback)(void* ctx, const Command& cmd);
+typedef void (*RequestCallback)(void* ctx, const Request& req);
 
 class BoardLink {
 public:
@@ -33,7 +27,7 @@ public:
   bool sendError(uint8_t errorCode);
 
   // Registration
-  void setCommandCallback(CommandCallback cb, void* ctx) { cmdCb_ = cb; cmdCtx_ = ctx; }
+  void setRequestCallback(RequestCallback cb, void* ctx) { reqCb_ = cb; reqCtx_ = ctx; }
 
   // Returns true if a remote is paired AND has sent something recently.
   bool isRemoteActive(uint32_t timeoutMs = 3000) const {
@@ -56,10 +50,10 @@ private:
   Preferences prefs_;
   bool paired_ = false;
   uint8_t peer_[6] = {0};
-  uint8_t groupId_ = ta::protocol::kPairGroupId;
+  uint8_t groupId_ = 0x01;
 
-  CommandCallback cmdCb_ = nullptr;
-  void* cmdCtx_ = nullptr;
+  RequestCallback reqCb_ = nullptr;
+  void* reqCtx_ = nullptr;
 
   uint32_t lastRxMs_ = 0; // millis() of last valid packet from remote
 

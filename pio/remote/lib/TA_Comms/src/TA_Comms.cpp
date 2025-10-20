@@ -78,29 +78,32 @@ namespace ta {
 
         bool EspNowLink::sendStart(float targetPsi) {
             uint8_t p[ta::protocol::kPayloadLen];
-            ta::protocol::packStart(p, targetPsi);
+            ta::protocol::Request r; r.kind = ta::protocol::Request::Kind::Start; r.targetPsi = targetPsi;
+            ta::protocol::packRequest(p, r);
             return sendRaw_(p);
         }
         bool EspNowLink::sendCancel() {
             uint8_t p[ta::protocol::kPayloadLen];
-            ta::protocol::packCancel(p);
+            ta::protocol::Request r; r.kind = ta::protocol::Request::Kind::Idle;
+            ta::protocol::packRequest(p, r);
             return sendRaw_(p);
         }
         bool EspNowLink::sendManual(uint8_t code) {
             uint8_t p[ta::protocol::kPayloadLen];
-            ta::protocol::packManual(p, code);
+            ta::protocol::Request r; r.kind = ta::protocol::Request::Kind::Manual; r.manual = static_cast<ta::protocol::ManualCode>(code);
+            ta::protocol::packRequest(p, r);
             return sendRaw_(p);
         }
         bool EspNowLink::sendPing() {
             uint8_t p[ta::protocol::kPayloadLen];
-            ta::protocol::packPing(p);
+            ta::protocol::Request r; r.kind = ta::protocol::Request::Kind::Ping;
+            ta::protocol::packRequest(p, r);
             return sendRaw_(p);
         }
 
         void EspNowLink::requestReconnect() {
             if (isConnected_) return;
             isConnecting_ = true;
-            pingBackoffMs_ = 200;
             nextPingAtMs_ = 0; // send immediately
         }
 
@@ -299,8 +302,8 @@ namespace ta {
           }
 
           // Normal status
-          StatusMsg sm;
-          if (!parseStatus(data, len, sm)) return;
+          Response sm;
+          if (!parseResponse(data, len, sm)) return;
 
           lastSeenMs_ = millis();
           isConnected_ = true;
