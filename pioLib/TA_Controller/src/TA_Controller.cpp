@@ -1,11 +1,21 @@
+#ifndef UNIT_TEST
 #include <Arduino.h>
+#else
+// Stub for unit tests
+#include <cstdint>
+inline uint32_t millis() { return 0; }
+#endif
+
 #include "TA_Controller.h"
+#ifndef UNIT_TEST
 #include "TA_Actuators.h"
+#endif
 #include <math.h>
 
 using namespace ta::ctl;
 
-// Adapter implementations
+#ifndef UNIT_TEST
+// Adapter implementations - only needed when using real Actuators hardware
 void Controller::ActuatorAdapter::setCompressor(bool on) { if (hw) hw->setCompressor(on); }
 void Controller::ActuatorAdapter::setVent(bool open) { if (hw) hw->setVent(open); }
 void Controller::ActuatorAdapter::stopAll() { if (hw) hw->stopAll(); }
@@ -16,6 +26,7 @@ void Controller::begin(ta::act::Actuators* act, const Config& cfg) {
   out_ = act ? static_cast<IOutputs*>(&actAdapter_) : nullptr;
   reset_();
 }
+#endif
 
 void Controller::begin(IOutputs* outputs, const Config& cfg) {
   cfg_ = cfg;
