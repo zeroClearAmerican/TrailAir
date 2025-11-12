@@ -26,15 +26,15 @@ jobs:
         working-directory: ./pio/remote
         run: platformio test -e native_test
 
-    - name: Run Control Board Tests
-      working-directory: ./pio/control_board
-      run: platformio test -e native_test
+      - name: Run Control Board Tests
+        working-directory: ./pio/control_board
+        run: platformio test -e native_test
 
-    - name: Upload test results
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: test-results
-        path: |
-          pio/remote/.pio/build/native_test/
-          pio/control_board/.pio/build/native_test/
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            pio/remote/.pio/build/native_test/
+            pio/control_board/.pio/build/native_test/
