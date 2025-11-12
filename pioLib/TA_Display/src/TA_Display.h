@@ -64,6 +64,9 @@ namespace ta {
                 void drawLogo(const uint8_t* logo, uint8_t w, uint8_t h);
                 void logoWipe(const uint8_t* logo, uint8_t w, uint8_t h, bool wipeIn, uint16_t stepDelayMs);
 
+                // Critical battery warning (called before forced sleep)
+                void drawCriticalBattery();
+
                 // Main render entrypoint; call every loop with current model
                 void render(const DisplayModel& m);
 

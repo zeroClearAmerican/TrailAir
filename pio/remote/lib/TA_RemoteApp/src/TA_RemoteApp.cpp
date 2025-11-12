@@ -4,6 +4,7 @@
 #include <esp_wifi.h>
 #include <esp_sleep.h>
 #include <TA_DisplayIcons.h>
+#include <TA_Config.h>
 
 namespace ta { namespace app {
 
@@ -33,10 +34,10 @@ void RemoteApp::begin() {
     Serial.println("ESP-NOW init failed");
   }
   // Configure link from shared config defaults
-  ta::state::Config scfg; // default values from ta::cfg
-  link_.setConnectionTimeoutMs(scfg.link.connectionTimeoutMs);
-  link_.setPingBackoffStartMs(scfg.link.pingBackoffStartMs);
-  link_.setPairReqIntervalMs(scfg.link.pairReqIntervalMs);
+  const ta::cfg::LinkShared linkCfg{};
+  link_.setConnectionTimeoutMs(linkCfg.connectionTimeoutMs);
+  link_.setPingBackoffStartMs(linkCfg.pingBackoffStartMs);
+  link_.setPairReqIntervalMs(linkCfg.pairReqIntervalMs);
   link_.setStatusCallback(&RemoteApp::onStatusStatic_, this);
   link_.setPairCallback(&RemoteApp::onPairEventStatic_, this);
   Serial.println("ESP-NOW initialized");
@@ -83,9 +84,44 @@ void RemoteApp::goToSleep_() {
   esp_wifi_stop();
   esp_light_sleep_start();
   Serial.println("Woke up from sleep.");
+  
+  // Check battery FIRST before re-initializing anything
+  batteryMon_.update();
+  if (batteryMon_.isCritical()) {
+    Serial.println("Critical battery detected on wake!");
+    criticalBatteryShutdown_();
+    return; // Will loop back into sleep without WiFi init
+  }
+  
   // Re-init after wake
   if (link_.hasPeer()) link_.requestReconnect();
   state_.resetAfterWake();
+}
+
+void RemoteApp::criticalBatteryShutdown_() {
+  Serial.println("CRITICAL BATTERY - Forcing sleep for battery protection");
+  
+  // Show warning on screen
+  if (ui_) {
+    ui_->drawCriticalBattery();
+    delay(1000);
+  }
+  
+  // Go straight to sleep without WiFi/radio init
+  esp_light_sleep_start();
+  Serial.println("Woke from critical battery sleep.");
+  
+  // Re-check battery on wake
+  batteryMon_.update();
+  if (batteryMon_.isCritical()) {
+    // Still critical, loop back
+    criticalBatteryShutdown_();
+  } else {
+    // Battery recovered, do full wake
+    Serial.println("Battery recovered, resuming normal operation.");
+    if (link_.hasPeer()) link_.requestReconnect();
+    state_.resetAfterWake();
+  }
 }
 
 void RemoteApp::loop() {
@@ -99,6 +135,13 @@ void RemoteApp::loop() {
   // Battery
   batteryMon_.update();
   state_.onBatteryPercent(batteryMon_.percent());
+  
+  // Critical battery protection - force sleep immediately
+  if (batteryMon_.isCritical()) {
+    Serial.println("Critical battery detected during operation!");
+    criticalBatteryShutdown_();
+    return; // Exit loop to prevent further operation
+  }
 
   // Link service
   link_.service();

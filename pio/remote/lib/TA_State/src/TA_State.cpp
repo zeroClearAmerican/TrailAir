@@ -1,17 +1,30 @@
 #include "TA_State.h"
+#include <Arduino.h>
+#include <TA_Protocol.h>
+#include <TA_Comms.h>
+#include <TA_Display.h>
+#include <TA_Input.h>
+#include <TA_UI.h>
+#include <TA_Config.h>
 
 namespace ta {
 namespace state {
 
 StateController::StateController(ta::comms::EspNowLink& link, const Config& cfg)
-  : link_(link), cfg_(cfg) {
+  : link_(link) {
+  // Ensure config pointers are valid by falling back to defaults
+  static const ta::cfg::UiShared kUiDefaults{};
+  static const ta::cfg::LinkShared kLinkDefaults{};
+  cfg_.ui = cfg.ui ? cfg.ui : &kUiDefaults;
+  cfg_.link = cfg.link ? cfg.link : &kLinkDefaults;
+
   ta::ui::UiConfig uic;
-  uic.minPsi = cfg_.ui.minPsi;
-  uic.maxPsi = cfg_.ui.maxPsi;
-  uic.defaultTargetPsi = cfg_.ui.defaultTargetPsi;
-  uic.stepSmall = cfg_.ui.stepSmall;
-  uic.doneHoldMs = cfg_.ui.doneHoldMs;
-  uic.errorAutoClearMs = cfg_.ui.errorAutoClearMs;
+  uic.minPsi = cfg_.ui->minPsi;
+  uic.maxPsi = cfg_.ui->maxPsi;
+  uic.defaultTargetPsi = cfg_.ui->defaultTargetPsi;
+  uic.stepSmall = cfg_.ui->stepSmall;
+  uic.doneHoldMs = cfg_.ui->doneHoldMs;
+  uic.errorAutoClearMs = cfg_.ui->errorAutoClearMs;
   ui_.begin(uic);
 }
 
@@ -39,7 +52,7 @@ void StateController::onBatteryPercent(int percent) {
   batteryPercent_ = constrain(percent, 0, 100);
 }
 
-void StateController::onStatus(const ta::protocol::StatusMsg& msg) {
+void StateController::onStatus(const ta::protocol::Response& msg) {
   using ta::protocol::Status;
   if (msg.status != Status::Error) {
     currentPsi_ = ta::protocol::byteToPsi05(msg.value);
@@ -90,7 +103,7 @@ void StateController::update(uint32_t now, bool isConnected, bool isConnecting) 
 
   // Manual resend while truly in Manual
   if (ui_.view() == ta::ui::View::Manual && manualSending_) {
-    if (now - lastManualSentMs_ >= cfg_.link.manualRepeatMs) {
+    if (now - lastManualSentMs_ >= cfg_.link->manualRepeatMs) {
       link_.sendManual(manualCode_);
       lastManualSentMs_ = now;
     }
@@ -118,7 +131,7 @@ void StateController::enter_(RemoteState s, uint32_t now) {
     lastManualSentMs_ = 0;
     manualCode_ = 0x00;
   }
-  
+
   switch (rState_) {
     case RemoteState::DISCONNECTED:
       pairingFailed_ = false;
@@ -165,13 +178,13 @@ void StateController::onButton(const ta::input::Event& e) {
 
   // Disconnected & Pairing shortcuts remain remote-specific
   if (rState_ == RemoteState::DISCONNECTED && e.id == ta::input::ButtonId::Right && e.action == ta::input::Action::Click) {
-    if (canStartPairing()) link_.startPairing(cfg_.link.pairGroupId, cfg_.link.pairTimeoutMs); else link_.requestReconnect();
+    if (canStartPairing()) link_.startPairing(cfg_.link->pairGroupId, cfg_.link->pairTimeoutMs); else link_.requestReconnect();
     return;
   }
   if (rState_ == RemoteState::PAIRING) {
     if (e.id == ta::input::ButtonId::Right && e.action == ta::input::Action::Click) {
       if (link_.isPairing()) link_.cancelPairing();
-      else if (pairingFailed_ && canStartPairing()) link_.startPairing(cfg_.link.pairGroupId, cfg_.link.pairTimeoutMs);
+      else if (pairingFailed_ && canStartPairing()) link_.startPairing(cfg_.link->pairGroupId, cfg_.link->pairTimeoutMs);
     }
     return;
   }

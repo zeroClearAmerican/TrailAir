@@ -35,6 +35,7 @@ private:
 
   void setupWakeup_();
   void goToSleep_();
+  void criticalBatteryShutdown_(); // Force sleep due to low battery
 
 private:
   Pins pins_{};

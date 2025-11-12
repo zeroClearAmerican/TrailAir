@@ -11,7 +11,7 @@ namespace ta {
             int deadbandMv = 50;         // change threshold in mV (battery side)
 
             // Percent mapping (LiPo 1S typical)
-            float vEmpty = 3.20f;        // volts at 0%
+            float vEmpty = 3.30f;        // volts at 0% (battery protection threshold)
             float vFull  = 4.14f;        // volts at 100%
             int lowPercent = 15;         // low-batt threshold
         };
@@ -31,6 +31,7 @@ namespace ta {
                 float voltage()      const { return filteredMv_ / 1000.0f; }
                 int   percent()      const { return percent_; }
                 bool  isLow()        const { return percent_ <= cfg_.lowPercent; }
+                bool  isCritical()   const { return voltage() <= cfg_.vEmpty; } // at or below protection threshold
                 bool  hasFix()       const { return hasFix_; }
 
                 // Maintenance

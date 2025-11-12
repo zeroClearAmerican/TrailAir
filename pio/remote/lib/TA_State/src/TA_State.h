@@ -1,11 +1,13 @@
 #pragma once
-#include <Arduino.h>
-#include <TA_Protocol.h>
-#include <TA_Comms.h>
-#include <TA_Display.h>
-#include <TA_Input.h>
+#include <stdint.h>
 #include <TA_UI.h>
-#include <TA_Config.h>
+#include <TA_Protocol.h>
+
+// Forward declarations to avoid including Arduino and heavy headers here
+namespace ta { namespace display { struct DisplayModel; } }
+namespace ta { namespace input { struct Event; } }
+namespace ta { namespace cfg { struct UiShared; struct LinkShared; } }
+namespace ta { namespace comms { class EspNowLink; enum class PairEvent; } }
 
 namespace ta {
 namespace state {
@@ -14,8 +16,8 @@ enum class RemoteState { DISCONNECTED, IDLE, MANUAL, SEEKING, ERROR, PAIRING };
 enum class ControlState { IDLE, AIRUP, VENTING, CHECKING, ERROR };
 
 struct Config {
-  ta::cfg::UiShared ui;           // shared UI config
-  ta::cfg::LinkShared link;       // shared link config
+  const ta::cfg::UiShared* ui = nullptr;           // shared UI config (pointer to avoid heavy include)
+  const ta::cfg::LinkShared* link = nullptr;       // shared link config (pointer to avoid heavy include)
 };
 
 class StateController {
@@ -28,7 +30,7 @@ public:
   void update(uint32_t now, bool isConnected, bool isConnecting);
 
   // Inputs
-  void onStatus(const ta::protocol::StatusMsg& msg);
+  void onStatus(const ta::protocol::Response& msg);
   void onBatteryPercent(int percent);
   void onButton(const ta::input::Event& e);
   void onPairEvent(ta::comms::PairEvent ev, const uint8_t mac[6]);

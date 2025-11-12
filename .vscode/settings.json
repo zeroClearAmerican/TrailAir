@@ -30,5 +30,13 @@
     "ostream": "cpp",
     "cstdint": "cpp",
     "istream": "cpp"
-  }
+  },
+  // Testing configuration
+  "testing.automaticallyOpenPeekView": "failureInVisibleDocument",
+  "testing.openTesting": "neverOpen",
+  "terminal.integrated.scrollback": 10000,
+  // C++ TestMate extension settings (if installed)
+  "testMate.cpp.test.executables": "pio/remote/.pio/build/native_test/program*",
+  "testMate.cpp.test.workingDirectory": "${workspaceFolder}/pio/remote",
+  "testMate.cpp.log.logpanel": true
 }

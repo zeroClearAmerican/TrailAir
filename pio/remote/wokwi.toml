@@ -1,0 +1,5 @@
+[wokwi]
+version = 1
+firmware = '\.pio\build\TrailAir_Remote\firmware.bin'
+elf = '\.pio\build\TrailAir_Remote\firmware.elf'
+gdbServerPort=3333

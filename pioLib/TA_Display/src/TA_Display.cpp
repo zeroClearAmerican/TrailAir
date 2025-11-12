@@ -45,6 +45,22 @@ namespace ta {
             }
         }
 
+        void TA_Display::drawCriticalBattery() {
+            d_.clearDisplay();
+            d_.setTextSize(1);
+            d_.setTextColor(SSD1306_WHITE);
+            
+            String msg = "Charge Battery";
+            int16_t w, h;
+            measure_(msg, 1, w, h);
+            int x = centerX_(w);
+            int y = centerYBetween_(h, 0, d_.height());
+            
+            d_.setCursor(x, y);
+            d_.print(msg);
+            d_.display();
+        }
+
         void TA_Display::render(const DisplayModel& m) {
             d_.clearDisplay();
             switch (m.view) {

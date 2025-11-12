@@ -52,13 +52,10 @@ namespace ta {
         };
 
         struct Response {
-            // Same payload as legacy StatusMsg
+            // Same payload as legacy status frames
             Status status = Status::Idle;
             uint8_t value = 0; // PSI in 0.5 units for non-Error, or error code if status==Error
         };
-
-        // Backward name (alias) to ease migration in code comments
-        using StatusMsg = Response;
 
         // Serialize outbound requests (always 2 bytes)
         inline void packRequest(uint8_t out[kPayloadLen], const Request& r) {
@@ -85,15 +82,7 @@ namespace ta {
             return true;
         }
 
-        // Serialize outbound responses
-        inline void packResponseStatus(uint8_t out[kPayloadLen], Status s, float psiOrUnused) {
-            out[0] = static_cast<uint8_t>(s);
-            out[1] = (s == Status::Error) ? static_cast<uint8_t>(psiOrUnused) : psiToByte05(psiOrUnused);
-        }
-        inline void packResponseError(uint8_t out[kPayloadLen], uint8_t errorCode) {
-            out[0] = static_cast<uint8_t>(Status::Error);
-            out[1] = errorCode;
-        }
+        // Parse inbound responses
         inline bool parseResponse(const uint8_t* data, int len, Response& out) {
             if (len != kPayloadLen) return false;
             switch (data[0]) {
@@ -107,13 +96,6 @@ namespace ta {
             out.value = data[1];
             return true;
         }
-
-        // Legacy helpers (wrap new API)
-        inline void packStart(uint8_t out[kPayloadLen], float targetPsi) { Request r; r.kind=Request::Kind::Start; r.targetPsi=targetPsi; packRequest(out,r); }
-        inline void packCancel(uint8_t out[kPayloadLen]) { Request r; r.kind=Request::Kind::Idle; packRequest(out,r); }
-        inline void packManual(uint8_t out[kPayloadLen], uint8_t code) { Request r; r.kind=Request::Kind::Manual; r.manual=static_cast<ManualCode>(code); packRequest(out,r); }
-        inline void packPing(uint8_t out[kPayloadLen]) { Request r; r.kind=Request::Kind::Ping; packRequest(out,r); }
-        inline bool parseStatus(const uint8_t* data, int len, StatusMsg& out) { return parseResponse(data,len,out); }
 
         // Parsed pairing message
         struct PairMsg {
