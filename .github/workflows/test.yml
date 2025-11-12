@@ -26,9 +26,9 @@ jobs:
         working-directory: ./pio/remote
         run: platformio test -e native_test
 
-      - name: Run Control Board Tests
-        working-directory: ./pio/control_board
-        run: platformio test -e native_test
+    - name: Run Control Board Tests
+      working-directory: ./pio/control_board
+      run: platformio test -e native_test
 
     - name: Upload test results
       if: always()
