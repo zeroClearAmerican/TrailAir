@@ -360,3 +360,11 @@ TEST(Protocol, ZeroPsi) {
     parseRequest(buf, kPayloadLen, parsed);
     EXPECT_FLOAT_EQ(parsed.targetPsi, 0.0f);
 }
+
+// ============================================================================
+// Main function
+// ============================================================================
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

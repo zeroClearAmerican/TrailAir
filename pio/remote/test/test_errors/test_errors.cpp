@@ -114,3 +114,11 @@ TEST(Errors, DisplayErrorScenario) {
     EXPECT_TRUE(strlen(displayText) > 0);
     EXPECT_TRUE(strlen(displayText) < 20); // Reasonable for display
 }
+
+// ============================================================================
+// Main function
+// ============================================================================
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

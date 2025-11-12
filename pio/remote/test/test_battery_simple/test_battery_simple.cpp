@@ -143,3 +143,11 @@ TEST(Battery, RealisticDischargeCurve) {
     EXPECT_EQ(calculatePercent(3.30f), 0);
     EXPECT_TRUE(isCritical(3.30f));
 }
+
+// ============================================================================
+// Main function
+// ============================================================================
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}
