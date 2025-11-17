@@ -370,18 +370,16 @@ TEST_F(UiTest, Disconnected_WhenDeviceNotConnected) {
     EXPECT_EQ(ui.view(), View::Disconnected);
 }
 
-TEST_F(UiTest, Disconnected_StayDisconnectedOnReconnect) {
-    // Test documents actual behavior: view doesn't auto-reset on reconnect
-    // The calling code (RemoteApp) is responsible for resetting view state
+TEST_F(UiTest, Disconnected_ReconnectRestoresIdle) {
     device.connected = false;
     uint32_t time = 0;
     ui.update(time, device, Ctrl::Idle);
     EXPECT_EQ(ui.view(), View::Disconnected);
 
-    // Reconnect - view stays Disconnected (prevents flicker)
+    // Reconnect - should restore to Idle
     device.connected = true;
     ui.update(time, device, Ctrl::Idle);
-    EXPECT_EQ(ui.view(), View::Disconnected);
+    EXPECT_EQ(ui.view(), View::Idle);
 }
 
 // ============================================================================

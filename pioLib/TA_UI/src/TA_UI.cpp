@@ -25,6 +25,11 @@ void UiStateMachine::update(uint32_t now, DeviceActions& dev, Ctrl ctrlState) {
     return;
   }
 
+  // Reconnected - restore from Disconnected to Idle
+  if (view_ == View::Disconnected) {
+    view_ = View::Idle;
+  }
+
   // Seeking completion -> Done hold then Idle
   if (view_ == View::Seeking) {
     if (ctrlState == Ctrl::AirUp || ctrlState == Ctrl::Venting || ctrlState == Ctrl::Checking) {
