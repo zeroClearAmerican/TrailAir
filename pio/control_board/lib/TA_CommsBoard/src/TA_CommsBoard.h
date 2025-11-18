@@ -31,8 +31,16 @@ public:
 
   // Returns true if a remote is paired AND has sent something recently.
   bool isRemoteActive(uint32_t timeoutMs = 3000) const {
-    if (!paired_ || lastRxMs_ == 0) return false;
-    return (millis() - lastRxMs_) < timeoutMs;
+    if (!paired_) return false;
+    
+    // Read lastRxMs_ atomically
+    uint32_t lastRx;
+    portENTER_CRITICAL(&isrMux_);
+    lastRx = lastRxMs_;
+    portEXIT_CRITICAL(&isrMux_);
+    
+    if (lastRx == 0) return false;
+    return (millis() - lastRx) < timeoutMs;
   }
 
 private:
@@ -55,7 +63,8 @@ private:
   RequestCallback reqCb_ = nullptr;
   void* reqCtx_ = nullptr;
 
-  uint32_t lastRxMs_ = 0; // millis() of last valid packet from remote
+  volatile uint32_t lastRxMs_ = 0; // millis() of last valid packet from remote
+  portMUX_TYPE isrMux_ = portMUX_INITIALIZER_UNLOCKED; // Mutex for ISR safety
 
   static BoardLink* inst_;
 };

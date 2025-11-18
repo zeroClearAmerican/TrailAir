@@ -137,7 +137,10 @@ void BoardLink::onRecv(const uint8_t* mac, const uint8_t* data, int len) {
   Request req;
   if (!parseRequest(data, len, req)) return;
 
-  lastRxMs_ = millis(); // mark remote activity
+  // Write lastRxMs_ atomically
+  portENTER_CRITICAL(&isrMux_);
+  lastRxMs_ = millis();
+  portEXIT_CRITICAL(&isrMux_);
 
   if (reqCb_) reqCb_(reqCtx_, req);
 }

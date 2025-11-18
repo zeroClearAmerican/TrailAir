@@ -257,7 +257,13 @@ namespace ta {
 
             // Skip ping logic while pairing (optional)
             if (!pairing_) {
-                if (isConnected_ && (now - lastSeenMs_) > connectionTimeoutMs_) {
+                // Read lastSeenMs_ atomically
+                uint32_t lastSeen;
+                portENTER_CRITICAL(&isrMux_);
+                lastSeen = lastSeenMs_;
+                portEXIT_CRITICAL(&isrMux_);
+
+                if (isConnected_ && (now - lastSeen) > connectionTimeoutMs_) {
                     isConnected_ = false;
         #if TA_COMMS_DEBUG
                     Serial.println("Connection lost.");
@@ -305,7 +311,11 @@ namespace ta {
           Response sm;
           if (!parseResponse(data, len, sm)) return;
 
+          // Write lastSeenMs_ atomically
+          portENTER_CRITICAL(&isrMux_);
           lastSeenMs_ = millis();
+          portEXIT_CRITICAL(&isrMux_);
+
           isConnected_ = true;
           isConnecting_ = false;
 

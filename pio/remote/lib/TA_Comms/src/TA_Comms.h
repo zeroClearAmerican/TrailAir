@@ -52,7 +52,13 @@ namespace ta {
                 void setPairReqIntervalMs(uint32_t ms) { pairReqIntervalMs_ = ms; }
                 bool isConnected() const { return isConnected_; }
                 bool isConnecting() const { return isConnecting_; }
-                uint32_t lastSeenMs() const { return lastSeenMs_; }
+                uint32_t lastSeenMs() const { 
+                    uint32_t val;
+                    portENTER_CRITICAL(&isrMux_);
+                    val = lastSeenMs_;
+                    portEXIT_CRITICAL(&isrMux_);
+                    return val;
+                }
 
                 // App callback when a valid status packet arrives
                 void setStatusCallback(StatusCallback cb, void* ctx) {
@@ -97,6 +103,7 @@ namespace ta {
 
                 // Connection tracking
                 volatile uint32_t lastSeenMs_ = 0;
+                portMUX_TYPE isrMux_ = portMUX_INITIALIZER_UNLOCKED; // Mutex for ISR safety
                 uint32_t connectionTimeoutMs_ = 5000; // ms
                 bool isConnected_ = false;
                 bool isConnecting_ = false;
