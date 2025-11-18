@@ -2,18 +2,18 @@
 
 ## Test Suite Overview
 
-**Total: 137 unit tests** across both projects
+**Total: 136 unit tests** across both projects
 
 ### Remote Tests (69 tests)
 
 - **test_protocol** (45 tests): Protocol encoding/decoding, pairing
 - **test_errors** (12 tests): Error codes and text mapping
 - **test_battery_simple** (8 tests): Battery voltage/percentage calculations
-- **test_ui** (68 tests): UI state machine and button handling
+- **test_ui** (68 tests): UI state machine and button handling (✅ Bug fixed: Disconnected→Idle)
 
-### Control Board Tests (68 tests)
+### Control Board Tests (67 tests)
 
-- **test_controller** (68 tests): State machine, PSI seeking, error handling, manual control
+- **test_controller** (67 tests): State machine, PSI seeking, error handling, manual control
 
 ## Running Tests
 
