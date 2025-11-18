@@ -14,12 +14,19 @@ inline uint32_t millis() { return 0; }
 
 using namespace ta::ctl;
 
+// Adapter implementations
 #ifndef UNIT_TEST
-// Adapter implementations - only needed when using real Actuators hardware
 void Controller::ActuatorAdapter::setCompressor(bool on) { if (hw) hw->setCompressor(on); }
 void Controller::ActuatorAdapter::setVent(bool open) { if (hw) hw->setVent(open); }
 void Controller::ActuatorAdapter::stopAll() { if (hw) hw->stopAll(); }
+#else
+// Stub implementations for unit tests (vtable needs these)
+void Controller::ActuatorAdapter::setCompressor(bool) {}
+void Controller::ActuatorAdapter::setVent(bool) {}
+void Controller::ActuatorAdapter::stopAll() {}
+#endif
 
+#ifndef UNIT_TEST
 void Controller::begin(ta::act::Actuators* act, const Config& cfg) {
   cfg_ = cfg;
   actAdapter_.hw = act;
