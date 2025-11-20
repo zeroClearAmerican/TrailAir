@@ -7,55 +7,27 @@
 #include <cstdint>
 #include <algorithm>
 
-// Mock Arduino types and functions
-typedef uint8_t byte;
-typedef bool boolean;
-
-inline unsigned long millis() {
-    static unsigned long counter = 0;
-    return ++counter;
-}
-
-template<typename T>
-T min(T a, T b) { return (a < b) ? a : b; }
-
-template<typename T>
-T max(T a, T b) { return (a > b) ? a : b; }
-
 // Mock FreeRTOS critical section macros
 typedef int portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED 0
 #define portENTER_CRITICAL(mux) do { (void)(mux); } while(0)
 #define portEXIT_CRITICAL(mux) do { (void)(mux); } while(0)
 
-// Mock ESP-NOW and WiFi for native testing
-#define ESP_OK 0
-#define ESP_NOW_SEND_SUCCESS 0
-#define WIFI_STA 1
-
-typedef int esp_err_t;
-typedef uint8_t esp_now_send_status_t;
-
-struct esp_now_peer_info_t {
-    uint8_t peer_addr[6];
-    uint8_t channel;
-    bool encrypt;
-};
-
-// Mock WiFi class
-class WiFiMock {
-public:
-    static void mode(int m) {}
-    static void disconnect() {}
-};
-WiFiMock WiFi;
-
-// Mock ESP-NOW functions
+// Mock global variables for ESP-NOW
 std::atomic<bool> esp_now_initialized{false};
 std::atomic<int> peer_count{0};
 std::function<void(const uint8_t*, const uint8_t*, int)> recv_callback;
 std::function<void(const uint8_t*, esp_now_send_status_t)> send_callback;
 
+// WiFi global
+class WiFiClass {
+public:
+    static void mode(int m) {}
+    static void disconnect() {}
+};
+WiFiClass WiFi;
+
+// ESP-NOW function implementations
 extern "C" {
     esp_err_t esp_now_init() { 
         esp_now_initialized = true;
@@ -89,17 +61,6 @@ extern "C" {
     }
 }
 
-// Mock Preferences
-class Preferences {
-public:
-    bool begin(const char*, bool) { return true; }
-    void end() {}
-    size_t getBytesLength(const char*) { return 0; }
-    size_t getBytes(const char*, void*, size_t) { return 0; }
-    size_t putBytes(const char*, const void*, size_t len) { return len; }
-    bool remove(const char*) { return true; }
-};
-
 // Mock Serial
 struct SerialMock {
     template<typename... Args>
@@ -110,7 +71,7 @@ struct SerialMock {
 // Include protocol (using build_flags include path)
 #include "TA_Protocol.h"
 
-// Include comms implementation
+// Include comms implementation (mock headers are in same dir, will be found first)
 #include "../../lib/TA_Comms/src/TA_Comms.cpp"
 
 using namespace ta::comms;
