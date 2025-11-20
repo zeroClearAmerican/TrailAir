@@ -107,11 +107,13 @@ struct SerialMock {
     static void println(const char*) {}
 } Serial;
 
-// Include protocol implementation
-#include "../../../../../pioLib/TA_Protocol/src/TA_Protocol.cpp"
+// Include protocol implementation (relative to pio/remote/)
+#include "../../../../pioLib/TA_Protocol/src/TA_Protocol.cpp"
 
 // Include comms implementation (it will pull in the header)
+#define UNIT_TEST
 #include "../../lib/TA_Comms/src/TA_Comms.cpp"
+#undef UNIT_TEST
 
 using namespace ta::comms;
 
