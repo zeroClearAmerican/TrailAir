@@ -2,7 +2,7 @@
 
 ## Test Suite Overview
 
-**Total: 136 unit tests** across both projects
+**Total: 136 unit tests** across both projects (actively tested in CI)
 
 ### Remote Tests (69 tests)
 
@@ -14,6 +14,26 @@
 ### Control Board Tests (67 tests)
 
 - **test_controller** (67 tests): State machine, PSI seeking, error handling, manual control
+
+### Additional Tests (Created, Not Yet in CI)
+
+- **test_comms** (16 tests): ESP-NOW ISR safety, connection management - _Requires ESP32 HAL mocking_
+- **test_comms_board** (19 tests): Board-side ESP-NOW safety - _Requires ESP32 HAL mocking_
+
+**Note:** Comms tests validate ISR safety hardening applied to production code. They require complex ESP32 hardware abstraction mocking and will be enabled in Phase 2.
+
+## Code Hardening
+
+### ISR Safety (Completed ✅)
+
+**See:** [ISR_SAFETY_HARDENING.md](ISR_SAFETY_HARDENING.md)
+
+Production code hardened against race conditions in ESP-NOW communication layer:
+
+- Added FreeRTOS spinlocks (`portMUX_TYPE`) for ISR-safe access
+- Protected shared state (`lastSeenMs_`, `lastRxMs_`) with critical sections
+- Made shared variables `volatile`
+- Zero functional impact, significant safety improvement
 
 ## Running Tests
 
