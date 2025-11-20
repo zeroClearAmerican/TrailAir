@@ -2,6 +2,31 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <cstring>
+#include <functional>
+#include <cstdint>
+#include <algorithm>
+
+// Mock Arduino types and functions
+typedef uint8_t byte;
+typedef bool boolean;
+
+inline unsigned long millis() {
+    static unsigned long counter = 0;
+    return ++counter;
+}
+
+template<typename T>
+T min(T a, T b) { return (a < b) ? a : b; }
+
+template<typename T>
+T max(T a, T b) { return (a > b) ? a : b; }
+
+// Mock FreeRTOS critical section macros
+typedef int portMUX_TYPE;
+#define portMUX_INITIALIZER_UNLOCKED 0
+#define portENTER_CRITICAL(mux) do { (void)(mux); } while(0)
+#define portEXIT_CRITICAL(mux) do { (void)(mux); } while(0)
 
 // Mock ESP-NOW and WiFi for native testing
 #define ESP_OK 0
@@ -82,8 +107,10 @@ struct SerialMock {
     static void println(const char*) {}
 } Serial;
 
-// Include implementation
-#include "../../../../pioLib/TA_Protocol/src/TA_Protocol.cpp"
+// Include protocol implementation
+#include "../../../../../pioLib/TA_Protocol/src/TA_Protocol.cpp"
+
+// Include comms implementation (it will pull in the header)
 #include "../../lib/TA_CommsBoard/src/TA_CommsBoard.cpp"
 
 using namespace ta::comms;
