@@ -2,14 +2,15 @@
 
 ## Test Suite Overview
 
-**Total: 136 unit tests** across both projects (actively tested in CI)
+**Total: 171 unit tests** across both projects (actively tested in CI)
 
-### Remote Tests (69 tests)
+### Remote Tests (104 tests)
 
 - **test_protocol** (45 tests): Protocol encoding/decoding, pairing
 - **test_errors** (12 tests): Error codes and text mapping
 - **test_battery_simple** (8 tests): Battery voltage/percentage calculations
 - **test_ui** (68 tests): UI state machine and button handling (✅ Bug fixed: Disconnected→Idle)
+- **test_time** (35 tests): Overflow-safe timeout utilities (✅ NEW)
 
 ### Control Board Tests (67 tests)
 
@@ -34,6 +35,17 @@ Production code hardened against race conditions in ESP-NOW communication layer:
 - Protected shared state (`lastSeenMs_`, `lastRxMs_`) with critical sections
 - Made shared variables `volatile`
 - Zero functional impact, significant safety improvement
+
+### Time/Timeout Overflow Safety (Completed ✅)
+
+**See:** [TIME_OVERFLOW_HARDENING.md](TIME_OVERFLOW_HARDENING.md)
+
+Production code hardened against `millis()` overflow (occurs every ~49.7 days):
+
+- Created overflow-safe timeout utilities (`TA_Time.h`)
+- Replaced unsafe `>=` comparisons with overflow-safe `hasElapsed()` / `isTimeFor()`
+- 35 comprehensive tests covering normal and overflow scenarios
+- Zero functional impact, prevents connection loss after 49 days of uptime
 
 ## Running Tests
 

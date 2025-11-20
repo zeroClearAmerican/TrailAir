@@ -5,6 +5,7 @@
 #include <esp_now.h>
 #include <Preferences.h>
 #include "TA_Protocol.h"
+#include "TA_Time.h"  // Overflow-safe time utilities
 
 namespace ta {
 namespace comms {
@@ -40,7 +41,7 @@ public:
     portEXIT_CRITICAL(&isrMux_);
     
     if (lastRx == 0) return false;
-    return (millis() - lastRx) < timeoutMs;
+    return ta::time::hasElapsed(millis(), lastRx, 0) && !ta::time::hasElapsed(millis(), lastRx, timeoutMs);
   }
 
 private:

@@ -1,4 +1,5 @@
 #include "TA_Comms.h"
+#include "TA_Time.h"  // Overflow-safe time utilities
 
 namespace ta {
     namespace comms {
@@ -196,7 +197,7 @@ namespace ta {
             if (pairing_) return false;
             pairing_ = true;
             pairingGroupId_ = groupId;
-            pairingTimeoutAt_ = millis() + timeoutMs;
+            pairingTimeoutAt_ = ta::time::futureTime(millis(), timeoutMs);
             nextPairReqAt_ = 0;
             pairReqIntervalMs_ = 500;
             ensureBroadcastPeer_();
@@ -263,27 +264,27 @@ namespace ta {
                 lastSeen = lastSeenMs_;
                 portEXIT_CRITICAL(&isrMux_);
 
-                if (isConnected_ && (now - lastSeen) > connectionTimeoutMs_) {
+                if (isConnected_ && ta::time::hasElapsed(now, lastSeen, connectionTimeoutMs_)) {
                     isConnected_ = false;
         #if TA_COMMS_DEBUG
                     Serial.println("Connection lost.");
         #endif
                 }
                 if (isConnecting_ && !isConnected_) {
-                    if (now >= nextPingAtMs_) {
+                    if (ta::time::isTimeFor(now, nextPingAtMs_)) {
                         sendPing();
-                        nextPingAtMs_ = now + pingBackoffMs_;
+                        nextPingAtMs_ = ta::time::futureTime(now, pingBackoffMs_);
                         pingBackoffMs_ = min(pingBackoffMs_ * 2, pingBackoffMaxMs_);
                     }
                 }
             }
 
             if (pairing_) {
-                if (now >= pairingTimeoutAt_) {
+                if (ta::time::isTimeFor(now, pairingTimeoutAt_)) {
                     stopPairing_(PairEvent::Timeout, peer_);
-                } else if (now >= nextPairReqAt_) {
+                } else if (ta::time::isTimeFor(now, nextPairReqAt_)) {
                     sendPairReq_();
-                    nextPairReqAt_ = now + pairReqIntervalMs_;
+                    nextPairReqAt_ = ta::time::futureTime(now, pairReqIntervalMs_);
                 }
             }
         }

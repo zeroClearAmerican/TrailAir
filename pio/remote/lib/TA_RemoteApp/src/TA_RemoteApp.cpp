@@ -5,6 +5,7 @@
 #include <esp_sleep.h>
 #include <TA_DisplayIcons.h>
 #include <TA_Config.h>
+#include <TA_Time.h>  // Overflow-safe time utilities
 
 namespace ta { namespace app {
 
@@ -127,7 +128,7 @@ void RemoteApp::criticalBatteryShutdown_() {
 void RemoteApp::loop() {
   // Read buttons
   buttons_.service();
-  if (millis() - lastButtonPressedMs_ > SLEEP_TIMEOUT_MS_) {
+  if (ta::time::hasElapsed(millis(), lastButtonPressedMs_, SLEEP_TIMEOUT_MS_)) {
     Serial.println("Sleep timeout exceeded.");
     goToSleep_();
   }
