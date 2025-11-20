@@ -107,8 +107,8 @@ struct SerialMock {
     static void println(const char*) {}
 } Serial;
 
-// Include protocol (header-only, 5 levels up to workspace root)
-#include "../../../../../pioLib/TA_Protocol/src/TA_Protocol.h"
+// Include protocol (using build_flags include path)
+#include "TA_Protocol.h"
 
 // Include comms implementation
 #include "../../lib/TA_Comms/src/TA_Comms.cpp"
