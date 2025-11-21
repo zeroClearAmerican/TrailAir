@@ -63,9 +63,9 @@ TEST(TimeUtils, HasElapsed_OverflowCase_LongWrap) {
 
 TEST(TimeUtils, HasElapsed_MaxTimeout) {
     uint32_t start = 100;
-    uint32_t now = 100 + 0x7FFFFFFF;  // Max safe timeout (~24.8 days)
+    uint32_t now = 100 + 0x7FFFFFFFUL;  // Max safe timeout (~24.8 days)
     
-    EXPECT_TRUE(hasElapsed(now, start, 0x7FFFFFFF));
+    EXPECT_TRUE(hasElapsed(now, start, 0x7FFFFFFFUL));
 }
 
 TEST(TimeUtils, HasElapsed_HalfwayOverflow) {
@@ -214,9 +214,7 @@ TEST(TimeUtils, Integration_ConnectionTimeout) {
     uint32_t now1 = 0xFFFFFFFF;  // 15ms later
     EXPECT_FALSE(hasElapsed(now1, lastSeenMs, timeoutMs));
     
-    uint32_t now2 = 0x000013
-
-88;  // 5000ms later (wrapped)
+    uint32_t now2 = 0x00001388;  // 5000ms later (wrapped)
     EXPECT_TRUE(hasElapsed(now2, lastSeenMs, timeoutMs));
 }
 
