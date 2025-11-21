@@ -45,10 +45,10 @@ TEST(TimeUtils, HasElapsed_OverflowCase_Wrapped) {
     uint32_t start = 0xFFFFFFFE;  // 4,294,967,294
     uint32_t now   = 0x00000002;  // 2 (wrapped around)
     
-    // Elapsed time: 0xFFFFFFFF - 0xFFFFFFFE + 0x00000002 + 1 = 5ms
-    EXPECT_TRUE(hasElapsed(now, start, 4));    // 4ms elapsed
-    EXPECT_TRUE(hasElapsed(now, start, 5));    // Exactly 5ms elapsed  
-    EXPECT_FALSE(hasElapsed(now, start, 6));   // Only 5ms elapsed, need 6
+    // Elapsed time: now - start = 0x00000002 - 0xFFFFFFFE = 0x00000004 = 4ms
+    EXPECT_TRUE(hasElapsed(now, start, 3));    // 4ms elapsed, need 3
+    EXPECT_TRUE(hasElapsed(now, start, 4));    // Exactly 4ms elapsed  
+    EXPECT_FALSE(hasElapsed(now, start, 5));   // Only 4ms elapsed, need 5
 }
 
 TEST(TimeUtils, HasElapsed_OverflowCase_LongWrap) {
@@ -152,8 +152,8 @@ TEST(TimeUtils, FutureTime_LargeDelay) {
     uint32_t now = 1000;
     uint32_t future = futureTime(now, 0xFFFFFF00);
     
-    // Should wrap
-    EXPECT_EQ(0xFFFF0F00u, future);
+    // Should wrap: 1000 + 0xFFFFFF00 = 0x000002E8 (after 32-bit wraparound)
+    EXPECT_EQ(0x000002E8u, future);
 }
 
 // ============================================================================
