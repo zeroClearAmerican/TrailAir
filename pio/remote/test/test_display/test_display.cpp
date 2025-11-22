@@ -5,7 +5,10 @@
 
 #define TA_TIME_TEST_MODE
 #include <gtest/gtest.h>
+#include <TA_Time.h>
+#include <TA_Time.cpp>          // Test mode implementation
 #include <TA_Time_test.h>
+#include <TA_Time_test.cpp>     // MockTime implementation
 #include "TA_Display_anim_impl.cpp"
 
 using namespace ta::display;
