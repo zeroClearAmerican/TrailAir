@@ -89,7 +89,12 @@ namespace ta {
                 
                 // Advance to next step
                 wipeState_.currentCol++;
-                wipeState_.lastStepMs += wipeState_.stepDelayMs;  // Advance by step amount, not to 'now'
+                // Advance lastStepMs - if stepDelayMs is 0, use current time to prevent infinite loop
+                if (wipeState_.stepDelayMs == 0) {
+                    wipeState_.lastStepMs = now;
+                } else {
+                    wipeState_.lastStepMs += wipeState_.stepDelayMs;
+                }
                 
                 // Check if animation is complete
                 if (wipeState_.currentCol > wipeState_.w) {
