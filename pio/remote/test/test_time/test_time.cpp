@@ -1,5 +1,5 @@
-#include <gtest/gtest.h>
 #define TA_TIME_TEST_MODE
+#include <gtest/gtest.h>
 #include "TA_Time.h"
 #include "TA_Time_test.h"
 
