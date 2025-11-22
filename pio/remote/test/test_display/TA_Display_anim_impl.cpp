@@ -48,35 +48,33 @@ public:
         
         uint32_t now = ta::time::getMillis();
         
-        // Check if it's time for the next step
-        if (!ta::time::hasElapsed(now, wipeState_.lastStepMs, wipeState_.stepDelayMs)) {
-            return;  // Not time yet
-        }
-        
-        // Calculate logo position
-        int x = (d_.width() - wipeState_.w) / 2;
-        int y = (d_.height() - wipeState_.h) / 2;
-        
-        // Draw current frame
-        d_.clearDisplay();
-        d_.drawBitmap(x, y, wipeState_.logo, wipeState_.w, wipeState_.h, 1);  // 1 = white
-        
-        if (wipeState_.wipeIn) {
-            // Mask the right side, revealing only the left pixels
-            d_.fillRect(x + wipeState_.currentCol, y, wipeState_.w - wipeState_.currentCol, wipeState_.h, 0);  // 0 = black
-        } else {
-            // Mask the left side, hiding the left pixels
-            d_.fillRect(x, y, wipeState_.currentCol, wipeState_.h, 0);  // 0 = black
-        }
-        d_.display();
-        
-        // Advance to next step
-        wipeState_.currentCol++;
-        wipeState_.lastStepMs = now;
-        
-        // Check if animation is complete
-        if (wipeState_.currentCol > wipeState_.w) {
-            wipeState_.active = false;
+        // Draw all frames that are ready (handles case where multiple steps have elapsed)
+        while (wipeState_.active && ta::time::hasElapsed(now, wipeState_.lastStepMs, wipeState_.stepDelayMs)) {
+            // Calculate logo position
+            int x = (d_.width() - wipeState_.w) / 2;
+            int y = (d_.height() - wipeState_.h) / 2;
+            
+            // Draw current frame
+            d_.clearDisplay();
+            d_.drawBitmap(x, y, wipeState_.logo, wipeState_.w, wipeState_.h, 1);  // 1 = white
+            
+            if (wipeState_.wipeIn) {
+                // Mask the right side, revealing only the left pixels
+                d_.fillRect(x + wipeState_.currentCol, y, wipeState_.w - wipeState_.currentCol, wipeState_.h, 0);  // 0 = black
+            } else {
+                // Mask the left side, hiding the left pixels
+                d_.fillRect(x, y, wipeState_.currentCol, wipeState_.h, 0);  // 0 = black
+            }
+            d_.display();
+            
+            // Advance to next step
+            wipeState_.currentCol++;
+            wipeState_.lastStepMs += wipeState_.stepDelayMs;  // Advance by step amount, not to 'now'
+            
+            // Check if animation is complete
+            if (wipeState_.currentCol > wipeState_.w) {
+                wipeState_.active = false;
+            }
         }
     }
 
