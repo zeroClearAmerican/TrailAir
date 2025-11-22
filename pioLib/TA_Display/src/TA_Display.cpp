@@ -1,5 +1,6 @@
 #include "TA_Display.h"
 #include "TA_DisplayIcons.h"
+#include <TA_Time.h>
 
 namespace ta {
     namespace display {
@@ -11,6 +12,7 @@ namespace ta {
             }
             d_.clearDisplay();
             if (showBootLogo && Icons::logo_bmp && Icons::LogoW && Icons::LogoH) {
+                // Use blocking version during begin() - happens once at startup
                 logoWipe(Icons::logo_bmp, Icons::LogoW, Icons::LogoH, true, 5);
             } else {
                 d_.display();
@@ -43,6 +45,62 @@ namespace ta {
                 d_.display();
                 delay(stepDelayMs);
             }
+        }
+
+        // Non-blocking animation API
+        void TA_Display::startLogoWipe(const uint8_t* logo, uint8_t w, uint8_t h, bool wipeIn, uint16_t stepDelayMs) {
+            wipeState_.active = true;
+            wipeState_.logo = logo;
+            wipeState_.w = w;
+            wipeState_.h = h;
+            wipeState_.wipeIn = wipeIn;
+            wipeState_.stepDelayMs = stepDelayMs;
+            wipeState_.currentCol = 0;
+            wipeState_.lastStepMs = ta::time::getMillis();
+            
+            // Draw initial frame immediately
+            updateLogoWipe();
+        }
+
+        void TA_Display::updateLogoWipe() {
+            if (!wipeState_.active) return;
+            
+            uint32_t now = ta::time::getMillis();
+            
+            // Check if it's time for the next step
+            if (!ta::time::hasElapsed(now, wipeState_.lastStepMs, wipeState_.stepDelayMs)) {
+                return;  // Not time yet
+            }
+            
+            // Calculate logo position
+            int x = (d_.width() - wipeState_.w) / 2;
+            int y = (d_.height() - wipeState_.h) / 2;
+            
+            // Draw current frame
+            d_.clearDisplay();
+            d_.drawBitmap(x, y, wipeState_.logo, wipeState_.w, wipeState_.h, SSD1306_WHITE);
+            
+            if (wipeState_.wipeIn) {
+                // Mask the right side, revealing only the left pixels
+                d_.fillRect(x + wipeState_.currentCol, y, wipeState_.w - wipeState_.currentCol, wipeState_.h, SSD1306_BLACK);
+            } else {
+                // Mask the left side, hiding the left pixels
+                d_.fillRect(x, y, wipeState_.currentCol, wipeState_.h, SSD1306_BLACK);
+            }
+            d_.display();
+            
+            // Advance to next step
+            wipeState_.currentCol++;
+            wipeState_.lastStepMs = now;
+            
+            // Check if animation is complete
+            if (wipeState_.currentCol > wipeState_.w) {
+                wipeState_.active = false;
+            }
+        }
+
+        bool TA_Display::isLogoWipeActive() const {
+            return wipeState_.active;
         }
 
         void TA_Display::drawCriticalBattery() {

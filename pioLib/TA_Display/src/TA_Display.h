@@ -62,7 +62,14 @@ namespace ta {
 
                 // Optional: draw centered logo and a left-to-right wipe animation
                 void drawLogo(const uint8_t* logo, uint8_t w, uint8_t h);
+                
+                // Blocking version (for backward compatibility)
                 void logoWipe(const uint8_t* logo, uint8_t w, uint8_t h, bool wipeIn, uint16_t stepDelayMs);
+                
+                // Non-blocking animation API
+                void startLogoWipe(const uint8_t* logo, uint8_t w, uint8_t h, bool wipeIn, uint16_t stepDelayMs);
+                void updateLogoWipe();  // Call from loop to advance animation
+                bool isLogoWipeActive() const;
 
                 // Critical battery warning (called before forced sleep)
                 void drawCriticalBattery();
@@ -100,6 +107,18 @@ namespace ta {
             private:
                 Adafruit_SSD1306& d_;
                 Style style_{};
+                
+                // Non-blocking animation state
+                struct {
+                    bool active = false;
+                    const uint8_t* logo = nullptr;
+                    uint8_t w = 0;
+                    uint8_t h = 0;
+                    bool wipeIn = true;
+                    uint16_t stepDelayMs = 0;
+                    int currentCol = 0;
+                    uint32_t lastStepMs = 0;
+                } wipeState_;
         };
 
     } // namespace display

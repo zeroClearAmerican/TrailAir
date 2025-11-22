@@ -47,7 +47,12 @@ void RemoteApp::begin() {
 
   delay(500);
   if (ui_) {
-    ui_->logoWipe(ta::display::Icons::logo_bmp, ta::display::Icons::LogoW, ta::display::Icons::LogoH, false, 5);
+    ui_->startLogoWipe(ta::display::Icons::logo_bmp, ta::display::Icons::LogoW, ta::display::Icons::LogoH, false, 5);
+    // Wait for wipe to complete before continuing
+    while (ui_->isLogoWipeActive()) {
+      ui_->updateLogoWipe();
+      delay(1);
+    }
   }
 }
 
@@ -78,7 +83,12 @@ void RemoteApp::goToSleep_() {
   if (ui_) {
     ui_->drawLogo(ta::display::Icons::logo_bmp, ta::display::Icons::LogoW, ta::display::Icons::LogoH);
     delay(1000);
-    ui_->logoWipe(ta::display::Icons::logo_bmp, ta::display::Icons::LogoW, ta::display::Icons::LogoH, false, 5);
+    ui_->startLogoWipe(ta::display::Icons::logo_bmp, ta::display::Icons::LogoW, ta::display::Icons::LogoH, false, 5);
+    // Wait for wipe to complete before sleeping
+    while (ui_->isLogoWipeActive()) {
+      ui_->updateLogoWipe();
+      delay(1);
+    }
   }
   WiFi.disconnect();
   WiFi.mode(WIFI_OFF);
@@ -126,6 +136,11 @@ void RemoteApp::criticalBatteryShutdown_() {
 }
 
 void RemoteApp::loop() {
+  // Update any active animations first
+  if (ui_) {
+    ui_->updateLogoWipe();
+  }
+
   // Read buttons
   buttons_.service();
   if (ta::time::hasElapsed(ta::time::getMillis(), lastButtonPressedMs_, SLEEP_TIMEOUT_MS_)) {
