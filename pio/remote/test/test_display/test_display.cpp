@@ -5,22 +5,20 @@
 
 #define TA_TIME_TEST_MODE
 #include <gtest/gtest.h>
-#include <TA_Display.h>
 #include <TA_Time_test.h>
+#include "TA_Display_anim_impl.cpp"
 
 using namespace ta::display;
 
 // ============================================================================
 // Mock Display Hardware - Tracks calls instead of rendering
 // ============================================================================
-class MockSSD1306 {
+class MockDisplay : public IDisplay {
 public:
     int clearDisplayCalls = 0;
     int displayCalls = 0;
     int drawBitmapCalls = 0;
     int fillRectCalls = 0;
-    int beginCalls = 0;
-    bool beginResult = true;
     
     // Mock dimensions
     int width_ = 128;
@@ -39,48 +37,32 @@ public:
         uint16_t color = 0;
     } lastRect;
     
-    // Mock Adafruit API
-    bool begin(uint8_t switchvcc, uint8_t i2caddr) {
-        beginCalls++;
-        return beginResult;
-    }
+    // IDisplay implementation
+    int width() const override { return width_; }
+    int height() const override { return height_; }
     
-    void clearDisplay() {
+    void clearDisplay() override {
         clearDisplayCalls++;
     }
     
-    void display() {
+    void display() override {
         displayCalls++;
     }
     
-    void drawBitmap(int16_t x, int16_t y, const uint8_t* bitmap, 
-                    int16_t w, int16_t h, uint16_t color) {
+    void drawBitmap(int x, int y, const uint8_t* bitmap, int w, int h, uint16_t color) override {
         drawBitmapCalls++;
         lastBitmap = {x, y, bitmap, (uint8_t)w, (uint8_t)h, color};
     }
     
-    void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+    void fillRect(int x, int y, int w, int h, uint16_t color) override {
         fillRectCalls++;
         lastRect = {x, y, w, h, color};
     }
     
-    int width() const { return width_; }
-    int height() const { return height_; }
-    
     // Test helpers
     void reset() {
         clearDisplayCalls = displayCalls = drawBitmapCalls = fillRectCalls = 0;
-        beginCalls = 0;
     }
-    
-    void setTextSize(uint8_t) {}
-    void setTextColor(uint16_t) {}
-    void setCursor(int16_t, int16_t) {}
-    void print(const char*) {}
-    void print(const String&) {}
-    void getTextBounds(const char*, int16_t, int16_t, 
-                      int16_t*, int16_t*, uint16_t*, uint16_t*) {}
-    void drawRect(int16_t, int16_t, int16_t, int16_t, uint16_t) {}
 };
 
 // ============================================================================
@@ -88,8 +70,8 @@ public:
 // ============================================================================
 class DisplayTest : public ::testing::Test {
 protected:
-    MockSSD1306 mockDisplay;
-    TA_Display* display = nullptr;
+    MockDisplay mockDisplay;
+    TA_DisplayAnim* display = nullptr;
     ta::time::test::MockTime mockTime;
     
     // Test logo data (8x8 pixels)
@@ -98,8 +80,8 @@ protected:
     static constexpr uint8_t logoH = 8;
     
     void SetUp() override {
-        // Create display with mock hardware
-        display = new TA_Display(*reinterpret_cast<Adafruit_SSD1306*>(&mockDisplay));
+        // Create display animation state machine with mock hardware
+        display = new TA_DisplayAnim(mockDisplay);
         mockDisplay.reset();
         mockTime.set(0);
     }
@@ -124,11 +106,6 @@ const uint8_t DisplayTest::testLogo[] = {
 // Initialization Tests
 // ============================================================================
 TEST_F(DisplayTest, InitialState_NotActive) {
-    EXPECT_FALSE(display->isLogoWipeActive());
-}
-
-TEST_F(DisplayTest, Begin_WithoutBootLogo_DoesNotStartAnimation) {
-    display->begin(0x3C, false);
     EXPECT_FALSE(display->isLogoWipeActive());
 }
 
@@ -424,19 +401,6 @@ TEST_F(DisplayTest, WideLogo_TakesLonger) {
     // Should take ~129 steps (width + 1)
     EXPECT_GE(steps, 128);
     EXPECT_LE(steps, 130);
-}
-
-// ============================================================================
-// Blocking API Compatibility
-// ============================================================================
-TEST_F(DisplayTest, BlockingLogoWipe_StillWorks) {
-    // The old blocking API should still be available for backward compatibility
-    // It won't be tested for animation state since it's synchronous
-    // Just verify it exists and can be called
-    display->logoWipe(testLogo, logoW, logoH, true, 5);
-    
-    // Should have rendered (called display multiple times)
-    EXPECT_GT(mockDisplay.displayCalls, 0);
 }
 
 // ============================================================================
