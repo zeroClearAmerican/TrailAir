@@ -56,7 +56,8 @@ namespace ta {
             wipeState_.wipeIn = wipeIn;
             wipeState_.stepDelayMs = stepDelayMs;
             wipeState_.currentCol = 0;
-            wipeState_.lastStepMs = ta::time::getMillis();
+            // Set to past time to ensure first frame draws immediately
+            wipeState_.lastStepMs = ta::time::getMillis() - stepDelayMs;
             
             // Draw initial frame immediately
             updateLogoWipe();
