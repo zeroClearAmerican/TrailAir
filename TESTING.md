@@ -2,15 +2,15 @@
 
 ## Test Suite Overview
 
-**Total: 171 unit tests** across both projects (actively tested in CI)
+**Total: 174 unit tests** across both projects (actively tested in CI)
 
-### Remote Tests (104 tests)
+### Remote Tests (107 tests)
 
 - **test_protocol** (45 tests): Protocol encoding/decoding, pairing
 - **test_errors** (12 tests): Error codes and text mapping
 - **test_battery_simple** (8 tests): Battery voltage/percentage calculations
 - **test_ui** (68 tests): UI state machine and button handling (✅ Bug fixed: Disconnected→Idle)
-- **test_time** (35 tests): Overflow-safe timeout utilities (✅ NEW)
+- **test_time** (38 tests): Overflow-safe timeout utilities + MockTime abstraction (✅ NEW)
 
 ### Control Board Tests (67 tests)
 

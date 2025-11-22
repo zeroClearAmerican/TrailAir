@@ -1,8 +1,37 @@
 #pragma once
 #include <stdint.h>
 
+// Conditional include: Arduino.h for production, test override for mocking
+#ifndef TA_TIME_TEST_MODE
+  #if defined(ARDUINO)
+    #include <Arduino.h>
+  #endif
+#endif
+
 namespace ta {
 namespace time {
+
+// ============================================================================
+// Time Source Abstraction (mockable in tests)
+// ============================================================================
+
+#ifdef TA_TIME_TEST_MODE
+  // Test mode: use mockable function pointer
+  extern uint32_t (*_testMillis)();
+  
+  inline uint32_t getMillis() {
+    return _testMillis ? _testMillis() : 0;
+  }
+#else
+  // Production mode: call Arduino millis() directly
+  inline uint32_t getMillis() {
+    return millis();
+  }
+#endif
+
+// ============================================================================
+// Overflow-Safe Time Operations
+// ============================================================================
 
 /**
  * @brief Check if a timeout has elapsed using overflow-safe arithmetic

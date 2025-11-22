@@ -23,7 +23,7 @@ void RemoteApp::begin() {
   buttons_.begin();
   buttons_.subscribe([](void* ctx, const ta::input::Event& e){
     auto* self = static_cast<RemoteApp*>(ctx);
-    self->lastButtonPressedMs_ = millis();
+    self->lastButtonPressedMs_ = ta::time::getMillis();
     self->state_.onButton(e);
   }, this);
 
@@ -128,7 +128,7 @@ void RemoteApp::criticalBatteryShutdown_() {
 void RemoteApp::loop() {
   // Read buttons
   buttons_.service();
-  if (ta::time::hasElapsed(millis(), lastButtonPressedMs_, SLEEP_TIMEOUT_MS_)) {
+  if (ta::time::hasElapsed(ta::time::getMillis(), lastButtonPressedMs_, SLEEP_TIMEOUT_MS_)) {
     Serial.println("Sleep timeout exceeded.");
     goToSleep_();
   }
@@ -150,7 +150,7 @@ void RemoteApp::loop() {
   bool isConnIng = link_.isConnecting();
 
   // State update
-  state_.update(millis(), isConn, isConnIng);
+  state_.update(ta::time::getMillis(), isConn, isConnIng);
   if (state_.takeSleepRequest()) {
     goToSleep_();
   }

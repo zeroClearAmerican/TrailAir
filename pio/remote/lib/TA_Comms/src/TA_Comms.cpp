@@ -197,7 +197,7 @@ namespace ta {
             if (pairing_) return false;
             pairing_ = true;
             pairingGroupId_ = groupId;
-            pairingTimeoutAt_ = ta::time::futureTime(millis(), timeoutMs);
+            pairingTimeoutAt_ = ta::time::futureTime(ta::time::getMillis(), timeoutMs);
             nextPairReqAt_ = 0;
             pairReqIntervalMs_ = 500;
             ensureBroadcastPeer_();
@@ -254,7 +254,7 @@ namespace ta {
         }
 
         void EspNowLink::service() {
-            uint32_t now = millis();
+            uint32_t now = ta::time::getMillis();
 
             // Skip ping logic while pairing (optional)
             if (!pairing_) {

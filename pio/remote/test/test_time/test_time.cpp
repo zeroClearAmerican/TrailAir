@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
+#define TA_TIME_TEST_MODE
 #include "TA_Time.h"
+#include "TA_Time_test.h"
 
 using namespace ta::time;
 
@@ -216,6 +218,51 @@ TEST(TimeUtils, Integration_ConnectionTimeout) {
     
     uint32_t now2 = 0x00001388;  // 5000ms later (wrapped)
     EXPECT_TRUE(hasElapsed(now2, lastSeenMs, timeoutMs));
+}
+
+// ============================================================================
+// MockTime Demonstration Tests
+// ============================================================================
+
+TEST(MockTime, BasicUsage) {
+    ta::time::test::MockTime mockTime;
+    
+    mockTime.set(1000);
+    EXPECT_EQ(getMillis(), 1000u);
+    
+    mockTime.advance(500);
+    EXPECT_EQ(getMillis(), 1500u);
+}
+
+TEST(MockTime, OverflowSimulation) {
+    ta::time::test::MockTime mockTime;
+    
+    // Set time near overflow
+    mockTime.set(0xFFFFFFF0);
+    uint32_t start = getMillis();
+    
+    // Advance past overflow
+    mockTime.advance(0x20);
+    
+    // Verify overflow-safe functions work
+    EXPECT_TRUE(hasElapsed(getMillis(), start, 0x20));
+    EXPECT_EQ(getMillis(), 0x00000010u);
+}
+
+TEST(MockTime, RealisticScenario) {
+    ta::time::test::MockTime mockTime;
+    
+    // Simulate connection timeout scenario
+    mockTime.set(0);
+    uint32_t lastSeen = getMillis();
+    
+    // Time passes, but not enough for timeout
+    mockTime.advance(4000);
+    EXPECT_FALSE(hasElapsed(getMillis(), lastSeen, 5000));
+    
+    // Now timeout occurs
+    mockTime.advance(1001);
+    EXPECT_TRUE(hasElapsed(getMillis(), lastSeen, 5000));
 }
 
 // Run all tests
