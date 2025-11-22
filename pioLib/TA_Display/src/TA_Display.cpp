@@ -68,8 +68,15 @@ namespace ta {
             
             uint32_t now = ta::time::getMillis();
             
-            // Draw all frames that are ready (handles case where multiple steps have elapsed)
-            while (wipeState_.active && ta::time::hasElapsed(now, wipeState_.lastStepMs, wipeState_.stepDelayMs)) {
+            // Check if it's time for next frame
+            if (!ta::time::hasElapsed(now, wipeState_.lastStepMs, wipeState_.stepDelayMs)) {
+                return;  // Not time yet
+            }
+            
+            // For zero delay, draw one frame per call
+            // For non-zero delay, draw all ready frames (catch up if behind)
+            bool continueDrawing = true;
+            while (wipeState_.active && continueDrawing) {
                 // Calculate logo position
                 int x = (d_.width() - wipeState_.w) / 2;
                 int y = (d_.height() - wipeState_.h) / 2;
@@ -89,11 +96,17 @@ namespace ta {
                 
                 // Advance to next step
                 wipeState_.currentCol++;
-                // Advance lastStepMs - if stepDelayMs is 0, use current time to prevent infinite loop
+                
+                // Update timing - different strategies for zero vs non-zero delay
                 if (wipeState_.stepDelayMs == 0) {
+                    // Zero delay: one frame per call, advance time to prevent immediate re-trigger
                     wipeState_.lastStepMs = now;
+                    continueDrawing = false;  // Draw only one frame
                 } else {
+                    // Non-zero delay: advance by step amount for precise timing
                     wipeState_.lastStepMs += wipeState_.stepDelayMs;
+                    // Check if more frames are ready
+                    continueDrawing = ta::time::hasElapsed(now, wipeState_.lastStepMs, wipeState_.stepDelayMs);
                 }
                 
                 // Check if animation is complete
