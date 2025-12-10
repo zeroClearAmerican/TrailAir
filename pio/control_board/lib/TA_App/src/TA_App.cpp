@@ -4,23 +4,42 @@
 namespace ta { namespace app {
 
 void App::begin() {
+  Serial.println("  [App] Initializing actuators...");
   // Actuators
   actuators_.begin({9, 10});
+  
+  Serial.println("  [App] Initializing pressure sensor...");
   // Sensors
   pressure_.begin(3, 10, 0.5f);
+  
+  Serial.println("  [App] Initializing controller...");
   // Controller
   ta::ctl::Config cfg; // defaults for now
   controller_.begin(&actuators_, cfg);
+  
+  Serial.println("  [App] Initializing comms (ESP-NOW)...");
   // Comms
-  comms_.begin();
+  if (!comms_.begin()) {
+    Serial.println("  [App] ERROR: Comms init failed!");
+  }
   comms_.setRequestCallback(&App::onRequestStatic_, this);
+  
+  Serial.println("  [App] Initializing state...");
   // State
   state_.begin();
+  
   // Display (optional)
   if (ui_ && disp_) {
+    Serial.println("  [App] Initializing display...");
     const uint8_t SCREEN_ADDRESS = 0x3C;
-    ui_->begin(SCREEN_ADDRESS, true);
+    if (!ui_->begin(SCREEN_ADDRESS, true)) {
+      Serial.println("  [App] WARNING: Display init failed!");
+    }
+  } else {
+    Serial.println("  [App] No display configured");
   }
+  
+  Serial.println("  [App] Initialization complete");
 }
 
 void App::onRequestStatic_(void* ctx, const ta::protocol::Request& req) {

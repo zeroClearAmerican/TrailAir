@@ -95,6 +95,7 @@ namespace ta {
                 const char* shortError_(uint8_t code) const;
                 // Layout helpers (to reduce repeated getTextBounds/centering math)
                 int topSafe_() const; // space for status row
+                int bottomSafe_() const; // space for button hints at bottom
                 void measure_(const String& s, uint8_t size, int16_t& w, int16_t& h);
                 int centerX_(int w) const;
                 int centerYBetween_(int h, int top, int bottom) const;

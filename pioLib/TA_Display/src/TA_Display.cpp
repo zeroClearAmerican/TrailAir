@@ -180,7 +180,7 @@ namespace ta {
 
         void TA_Display::drawButtonHints_(const uint8_t* left, const uint8_t* down, const uint8_t* up, const uint8_t* right) {
             const int iconSize = style_.btnIcon;
-            const int cellW = 32;
+            const int cellW = d_.width() / 4;
             const int y = d_.height() - iconSize;
             const int offset = (cellW - iconSize) / 2;
             if (left)  d_.drawBitmap(0   + offset, y, left,  iconSize, iconSize, SSD1306_WHITE);
@@ -191,6 +191,7 @@ namespace ta {
 
         // Layout helpers
         int TA_Display::topSafe_() const { return style_.statusRowH; }
+        int TA_Display::bottomSafe_() const { return d_.height() - style_.btnIcon - 2; }  // Reserve space for button hints + 2px margin
 
         void TA_Display::measure_(const String& s, uint8_t size, int16_t& w, int16_t& h) {
             int16_t bx, by; uint16_t bw, bh;
@@ -233,7 +234,7 @@ namespace ta {
             int16_t lw, lh, rw, rh;
             measure_(left, textSize, lw, lh);
             measure_(right, textSize, rw, rh);
-            int centerY = centerYBetween_(lh, topSafe_(), d_.height());
+            int centerY = centerYBetween_(lh, topSafe_(), bottomSafe_());
             int mid = d_.width() / 2;
             // Left cell
             int l0 = 0, l1 = mid - gap/2;
@@ -259,7 +260,7 @@ namespace ta {
             const uint8_t* bmp = (m.link == Link::Connected) ? Icons::icon_connected_20x20 : Icons::icon_disconnected_20x20;
             const int w = 20, h = 20;
             const int x = centerX_(w);
-            const int y = centerYBetween_(h, topSafe_(), d_.height());
+            const int y = centerYBetween_(h, topSafe_(), bottomSafe_());
             d_.drawBitmap(x, y, bmp, w, h, SSD1306_WHITE);
 
             // Right button hint (retry) when disconnected
@@ -285,7 +286,7 @@ namespace ta {
             drawButtonHints_(nullptr, nullptr, nullptr, Icons::icon_cancel_6x6);
 
             if (m.seekingShowDoneHold) {
-                drawCenteredText_("Done!", 2, centerYBetween_(0, topSafe_(), d_.height()));
+                drawCenteredText_("Done!", 2, centerYBetween_(0, topSafe_(), bottomSafe_()));
                 return;
             }
 
@@ -313,11 +314,11 @@ namespace ta {
             if (m.ctrl == Ctrl::AirUp) txt = "Inflating...";
             else if (m.ctrl == Ctrl::Venting) txt = "Deflating...";
 
-            drawCenteredText_(txt, 1, centerYBetween_(0, topSafe_(), d_.height()));
+            drawCenteredText_(txt, 1, centerYBetween_(0, topSafe_(), bottomSafe_()));
         }
 
         const char* TA_Display::shortError_(uint8_t code) const {
-            return ta::errors::shortText(code);
+            return trailair::errors::getShortDescription(code);
         }
 
         void TA_Display::drawError(const DisplayModel& m) {
@@ -337,7 +338,7 @@ namespace ta {
             // Auto-size large, fallback to small
             int16_t w, h; measure_(msg, 2, w, h);
             uint8_t size = (w > d_.width()) ? 1 : 2;
-            drawCenteredText_(msg, size, centerYBetween_(0, topSafe_(), d_.height()));
+            drawCenteredText_(msg, size, centerYBetween_(0, topSafe_(), bottomSafe_()));
         }
 
         void TA_Display::drawPairing(const DisplayModel& m) {
@@ -359,7 +360,7 @@ namespace ta {
                 line = buf;
             }
 
-            drawCenteredText_(line, 1, centerYBetween_(0, topSafe_(), d_.height()));
+            drawCenteredText_(line, 1, centerYBetween_(0, topSafe_(), bottomSafe_()));
         }
     } // namespace display
 } // namespace ta

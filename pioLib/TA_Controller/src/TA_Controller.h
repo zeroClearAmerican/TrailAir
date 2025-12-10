@@ -11,11 +11,11 @@ enum class State { IDLE, AIRUP, VENTING, CHECKING, ERROR };
 
 // Keep internal enum but map values to shared catalog for wire/display compatibility
 enum class ErrorCode : uint8_t {
-  NONE = ta::errors::NONE,
-  NO_CHANGE = ta::errors::NO_CHANGE,
-  EXCESSIVE_TIME = ta::errors::EXCESSIVE_TIME,
+  NONE = static_cast<uint8_t>(trailair::errors::ErrorCode::None),
+  NO_CHANGE = static_cast<uint8_t>(trailair::errors::ErrorCode::NoChange),
+  EXCESSIVE_TIME = static_cast<uint8_t>(trailair::errors::ErrorCode::ExcessiveTime),
   // Additional internal codes can be added; default mapping uses raw byte
-  UNKNOWN = ta::errors::UNKNOWN
+  UNKNOWN = static_cast<uint8_t>(trailair::errors::ErrorCode::Unknown)
 };
 
 // Injectable outputs for unit testing or alternative drivers

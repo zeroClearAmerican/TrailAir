@@ -6,7 +6,7 @@
 // Forward declarations to avoid including Arduino and heavy headers here
 namespace ta { namespace display { struct DisplayModel; } }
 namespace ta { namespace input { struct Event; } }
-namespace ta { namespace cfg { struct UiShared; struct LinkShared; } }
+namespace trailair { namespace config { struct UserInterfaceConfiguration; struct CommunicationConfiguration; } }
 namespace ta { namespace comms { class EspNowLink; enum class PairEvent; } }
 
 namespace ta {
@@ -16,8 +16,8 @@ enum class RemoteState { DISCONNECTED, IDLE, MANUAL, SEEKING, ERROR, PAIRING };
 enum class ControlState { IDLE, AIRUP, VENTING, CHECKING, ERROR };
 
 struct Config {
-  const ta::cfg::UiShared* ui = nullptr;           // shared UI config (pointer to avoid heavy include)
-  const ta::cfg::LinkShared* link = nullptr;       // shared link config (pointer to avoid heavy include)
+  const trailair::config::UserInterfaceConfiguration* ui = nullptr;           // shared UI config (pointer to avoid heavy include)
+  const trailair::config::CommunicationConfiguration* link = nullptr;       // shared link config (pointer to avoid heavy include)
 };
 
 class StateController {
@@ -33,8 +33,7 @@ public:
   void onStatus(const ta::protocol::Response& msg);
   void onBatteryPercent(int percent);
   void onButton(const ta::input::Event& e);
-  void onPairEvent(ta::comms::PairEvent ev, const uint8_t mac[6]);
-  bool canStartPairing() const; 
+  void onPairEvent(ta::comms::PairEvent ev, const uint8_t mac[6]); 
 
   // UI
   void buildDisplayModel(ta::display::DisplayModel& dm) const;

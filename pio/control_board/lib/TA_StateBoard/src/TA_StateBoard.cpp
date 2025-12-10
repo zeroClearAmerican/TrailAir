@@ -77,7 +77,7 @@ void StateBoard::buildDisplayModel(ta::display::DisplayModel& m,
   m.targetPSI  = ui_.targetPsi();
 
   // Link icon
-  m.link = (link.isPaired() && link.isRemoteActive(cfg_.link.remoteActiveTimeoutMs))
+  m.link = (link.isPaired() && link.isRemoteActive(cfg_.link.remoteActiveTimeoutMilliseconds))
           ? ta::display::Link::Connected
           : ta::display::Link::Disconnected;
 

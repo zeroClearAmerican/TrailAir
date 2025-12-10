@@ -35,13 +35,19 @@ void RemoteApp::begin() {
     Serial.println("ESP-NOW init failed");
   }
   // Configure link from shared config defaults
-  const ta::cfg::LinkShared linkCfg{};
-  link_.setConnectionTimeoutMs(linkCfg.connectionTimeoutMs);
-  link_.setPingBackoffStartMs(linkCfg.pingBackoffStartMs);
-  link_.setPairReqIntervalMs(linkCfg.pairReqIntervalMs);
+  const trailair::config::CommunicationConfiguration linkCfg{};
+  link_.setConnectionTimeoutMs(linkCfg.connectionTimeoutMilliseconds);
+  link_.setPingBackoffStartMs(linkCfg.pingBackoffStartMilliseconds);
+  link_.setPairReqIntervalMs(linkCfg.pairingRequestIntervalMilliseconds);
   link_.setStatusCallback(&RemoteApp::onStatusStatic_, this);
   link_.setPairCallback(&RemoteApp::onPairEventStatic_, this);
   Serial.println("ESP-NOW initialized");
+  
+  // If we have a saved peer, start reconnection attempts immediately
+  if (link_.hasPeer()) {
+    Serial.println("Saved peer found - initiating reconnection");
+    link_.requestReconnect();
+  }
 
   state_.begin();
 

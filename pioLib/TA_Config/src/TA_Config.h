@@ -1,31 +1,65 @@
 #pragma once
 #include <stdint.h>
 
-namespace ta { namespace cfg {
+namespace trailair {
+namespace config {
 
-// Shared UI configuration used by both control board and remote
-struct UiShared {
-  float minPsi = 0.0f;
-  float maxPsi = 50.0f;
-  float defaultTargetPsi = 32.0f;
-  float stepSmall = 1.0f;          // PSI increment/decrement per click
-  uint32_t doneHoldMs = 1500;      // "Done" hold duration after seeking
-  uint32_t errorAutoClearMs = 4000;// auto-exit Error after this window (0=disabled)
+/**
+ * @brief User interface configuration shared by both control board and remote
+ * 
+ * Defines pressure limits, step sizes, and timing constants for the UI layer.
+ */
+struct UserInterfaceConfiguration {
+  /// Minimum allowable pressure in PSI
+  float minimumPressurePSI = 0.0f;
+  
+  /// Maximum allowable pressure in PSI
+  float maximumPressurePSI = 50.0f;
+  
+  /// Default target pressure in PSI when system starts
+  float defaultTargetPressurePSI = 32.0f;
+  
+  /// Small pressure adjustment step in PSI (per button click)
+  float pressureStepSmallPSI = 1.0f;
+  
+  /// Duration to display "Done" message after seeking completes
+  uint32_t doneHoldDurationMilliseconds = 1500;
+  
+  /// Auto-clear error screen after this duration (0 = disabled)
+  uint32_t errorAutoClearDurationMilliseconds = 4000;
 };
 
-// Shared link configuration (timeouts, backoffs, pairing)
-struct LinkShared {
-  uint32_t remoteActiveTimeoutMs = 3000; // board: consider remote active if seen within this
-  uint32_t connectionTimeoutMs = 5000;   // remote: lose connection after this
-  // Manual resend cadence (remote manual streaming)
-  uint32_t manualRepeatMs = 300;
-  // Reconnect/ping backoff (remote)
-  uint32_t pingBackoffStartMs = 200;
-  uint32_t pingBackoffMaxMs = 2000;
-  // Pairing
-  uint8_t pairGroupId = 0x01;     // default group id
-  uint32_t pairReqIntervalMs = 500;
-  uint32_t pairTimeoutMs = 30000;
+/**
+ * @brief Communication link configuration shared by both devices
+ * 
+ * Defines timeouts, retry intervals, and pairing parameters for the 
+ * wireless communication link between remote and control board.
+ */
+struct CommunicationConfiguration {
+  /// Control board: timeout to consider remote as inactive
+  uint32_t remoteActiveTimeoutMilliseconds = 3000;
+  
+  /// Remote: timeout to consider connection lost
+  uint32_t connectionTimeoutMilliseconds = 5000;
+  
+  /// Interval for resending manual control commands (remote manual streaming)
+  uint32_t manualRepeatIntervalMilliseconds = 300;
+  
+  /// Initial backoff delay for ping/reconnect attempts
+  uint32_t pingBackoffStartMilliseconds = 200;
+  
+  /// Maximum backoff delay for ping/reconnect attempts
+  uint32_t pingBackoffMaximumMilliseconds = 2000;
+  
+  /// Default pairing group identifier (allows multiple systems in same area)
+  uint8_t pairingGroupIdentifier = 0x01;
+  
+  /// Interval between pairing request broadcasts
+  uint32_t pairingRequestIntervalMilliseconds = 500;
+  
+  /// Total timeout for pairing process before giving up
+  uint32_t pairingTimeoutMilliseconds = 30000;
 };
 
-}} // namespace ta::cfg
+}  // namespace config
+}  // namespace trailair

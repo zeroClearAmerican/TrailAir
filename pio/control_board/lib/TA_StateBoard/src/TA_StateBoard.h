@@ -13,8 +13,8 @@ namespace ta {
     class StateBoard {
     public:
       struct Config {
-        ta::cfg::UiShared ui;      // shared UI config
-        ta::cfg::LinkShared link;  // shared link config (timeouts, pairing)
+        trailair::config::UserInterfaceConfiguration ui;      // shared UI config
+        trailair::config::CommunicationConfiguration link;  // shared link config (timeouts, pairing)
         float stepPsiLarge = 5.0f;       // optional extra step not used by shared UI
       };
 

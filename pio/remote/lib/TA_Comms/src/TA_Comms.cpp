@@ -231,6 +231,17 @@ namespace ta {
                 case PairOp::Ack:
                     if (pm.value == pairingGroupId_) {
                         stopPairing_(PairEvent::Acked, mac);   // Acked first
+                        
+                        // If we're switching to a new peer MAC, remove the old one first
+                        if (hasPeer_ && memcmp(peer_, mac, 6) != 0) {
+                            #if TA_COMMS_DEBUG
+                            Serial.printf("[Pairing] Switching from old peer %02X:%02X:%02X:%02X:%02X:%02X to new peer %02X:%02X:%02X:%02X:%02X:%02X\n",
+                                peer_[0], peer_[1], peer_[2], peer_[3], peer_[4], peer_[5],
+                                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                            #endif
+                            esp_now_del_peer(peer_);
+                        }
+                        
                         savePeerToNVS(mac);                    // then Saved event
                         // add peer if needed
                         if (!esp_now_is_peer_exist(mac)) {
