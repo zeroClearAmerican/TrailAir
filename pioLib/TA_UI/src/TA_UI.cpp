@@ -1,122 +1,141 @@
 #include "TA_UI.h"
 
-namespace ta { namespace ui {
+namespace trailair {
+namespace ui {
 
-void UiStateMachine::update(uint32_t now, DeviceActions& dev, Ctrl ctrlState) {
+void UserInterfaceStateMachine::update(uint32_t now, DeviceActions& deviceActions, ControllerState controllerState) {
   // Controller error gates Error view
-  if (ctrlState == Ctrl::Error) {
-    if (view_ != View::Error) {
-      view_ = View::Error;
-      errorEntryMs_ = now;
+  if (controllerState == ControllerState::Error) {
+    if (_viewState != ViewState::Error) {
+      _viewState = ViewState::Error;
+      _errorEntryTime = now;
     } else {
       // Optional auto-clear trigger via strategy if desired by device
-      if (cfg_.errorAutoClearMs > 0 && (now - errorEntryMs_) >= cfg_.errorAutoClearMs) {
-        dev.clearError();
-        // Wait for ctrlState to change before leaving Error view
+      if (_config.errorAutoClearDurationMilliseconds > 0 &&
+          (now - _errorEntryTime) >= _config.errorAutoClearDurationMilliseconds) {
+        deviceActions.clearError();
+        // Wait for controllerState to change before leaving Error view
       }
     }
     return;
   }
 
   // If connected dimension matters (remote), exit to Disconnected
-  if (!dev.isConnected()) {
+  if (!deviceActions.isConnected()) {
     // do not force Disconnected for board (isConnected true by default)
-    view_ = View::Disconnected;
+    _viewState = ViewState::Disconnected;
     return;
   }
 
   // Reconnected - restore from Disconnected to Idle
-  if (view_ == View::Disconnected) {
-    view_ = View::Idle;
+  if (_viewState == ViewState::Disconnected) {
+    _viewState = ViewState::Idle;
   }
 
   // Seeking completion -> Done hold then Idle
-  if (view_ == View::Seeking) {
-    if (ctrlState == Ctrl::AirUp || ctrlState == Ctrl::Venting || ctrlState == Ctrl::Checking) {
-      seenSeekingActivity_ = true;
+  if (_viewState == ViewState::Seeking) {
+    if (controllerState == ControllerState::AirUp ||
+        controllerState == ControllerState::Venting ||
+        controllerState == ControllerState::Checking) {
+      _hasSeenSeekingActivity = true;
     }
-    if (ctrlState == Ctrl::Idle && seenSeekingActivity_) {
-      showDoneHold_ = true;
-      doneHoldUntil_ = now + cfg_.doneHoldMs;
-      view_ = View::Idle;
+    if (controllerState == ControllerState::Idle && _hasSeenSeekingActivity) {
+      _showDoneHold = true;
+      _doneHoldEndTime = now + _config.doneHoldDurationMilliseconds;
+      _viewState = ViewState::Idle;
     }
   }
 
-  if (view_ == View::Error && ctrlState != Ctrl::Error) {
-    view_ = View::Idle;
+  if (_viewState == ViewState::Error && controllerState != ControllerState::Error) {
+    _viewState = ViewState::Idle;
   }
 
-  if (showDoneHold_ && now >= doneHoldUntil_) {
-    showDoneHold_ = false;
+  if (_showDoneHold && now >= _doneHoldEndTime) {
+    _showDoneHold = false;
   }
 }
 
-void UiStateMachine::onButton(const ButtonEvent& e, DeviceActions& dev) {
-  switch (view_) {
-    case View::Idle: {
-      if (e.action == Action::Click) {
-        if (e.id == Button::Left) {
-          view_ = View::Manual;
-          manualVentActive_ = false;
-          manualAirActive_ = false;
-          dev.cancel();
-        } else if (e.id == Button::Right) {
-          dev.startSeek(targetPsi_);
-          view_ = View::Seeking;
-          seenSeekingActivity_ = false;
-          showDoneHold_ = false;
-        } else if (e.id == Button::Up) {
-          targetPsi_ += cfg_.stepSmall; clampTarget_();
-        } else if (e.id == Button::Down) {
-          targetPsi_ -= cfg_.stepSmall; clampTarget_();
+void UserInterfaceStateMachine::onButton(const ButtonEvent& event, DeviceActions& deviceActions) {
+  switch (_viewState) {
+    case ViewState::Idle: {
+      if (event.action == ButtonAction::Click) {
+        if (event.id == ButtonId::Left) {
+          _viewState = ViewState::Manual;
+          _isManualVentActive = false;
+          _isManualAirActive = false;
+          deviceActions.cancel();
+        } else if (event.id == ButtonId::Right) {
+          deviceActions.startSeek(_targetPSI);
+          _viewState = ViewState::Seeking;
+          _hasSeenSeekingActivity = false;
+          _showDoneHold = false;
+        } else if (event.id == ButtonId::Up) {
+          _targetPSI += _config.stepSize;
+          clampTargetPressure();
+        } else if (event.id == ButtonId::Down) {
+          _targetPSI -= _config.stepSize;
+          clampTargetPressure();
         }
       }
       break;
     }
 
-    case View::Manual: {
-      if (e.action == Action::Click && e.id == Button::Left) {
-        if (manualVentActive_) dev.manualVent(false);
-        if (manualAirActive_) dev.manualAirUp(false);
-        manualVentActive_ = manualAirActive_ = false;
-        view_ = View::Idle;
+    case ViewState::Manual: {
+      if (event.action == ButtonAction::Click && event.id == ButtonId::Left) {
+        if (_isManualVentActive) deviceActions.manualVent(false);
+        if (_isManualAirActive) deviceActions.manualAirUp(false);
+        _isManualVentActive = _isManualAirActive = false;
+        _viewState = ViewState::Idle;
         break;
       }
-      if (e.action == Action::Pressed) {
-        if (e.id == Button::Down && !manualVentActive_) { dev.manualVent(true); manualVentActive_ = true; }
-        if (e.id == Button::Up   && !manualAirActive_)  { dev.manualAirUp(true); manualAirActive_ = true; }
-      } else if (e.action == Action::Released) {
-        if (e.id == Button::Down && manualVentActive_) { dev.manualVent(false); manualVentActive_ = false; }
-        if (e.id == Button::Up   && manualAirActive_)  { dev.manualAirUp(false); manualAirActive_ = false; }
+      if (event.action == ButtonAction::Pressed) {
+        if (event.id == ButtonId::Down && !_isManualVentActive) {
+          deviceActions.manualVent(true);
+          _isManualVentActive = true;
+        }
+        if (event.id == ButtonId::Up && !_isManualAirActive) {
+          deviceActions.manualAirUp(true);
+          _isManualAirActive = true;
+        }
+      } else if (event.action == ButtonAction::Released) {
+        if (event.id == ButtonId::Down && _isManualVentActive) {
+          deviceActions.manualVent(false);
+          _isManualVentActive = false;
+        }
+        if (event.id == ButtonId::Up && _isManualAirActive) {
+          deviceActions.manualAirUp(false);
+          _isManualAirActive = false;
+        }
       }
       break;
     }
 
-    case View::Seeking: {
-      if (e.action == Action::Click && e.id == Button::Right) {
-        dev.cancel();
-        view_ = View::Idle; // base state; done-hold is independent flag
-        showDoneHold_ = false;
+    case ViewState::Seeking: {
+      if (event.action == ButtonAction::Click && event.id == ButtonId::Right) {
+        deviceActions.cancel();
+        _viewState = ViewState::Idle;
+        _showDoneHold = false;
       }
       break;
     }
 
-    case View::Error: {
-      if (e.action == Action::Click && e.id == Button::Right) {
-        dev.clearError();
+    case ViewState::Error: {
+      if (event.action == ButtonAction::Click && event.id == ButtonId::Right) {
+        deviceActions.clearError();
       }
       break;
     }
 
-    case View::Disconnected: {
+    case ViewState::Disconnected: {
       // shared layer doesn't do pairing; device may map buttons separately
       break;
     }
 
-    case View::Pairing: {
+    case ViewState::Pairing: {
       break;
     }
   }
 }
 
-}} // namespace ta::ui
+} // namespace ui
+} // namespace trailair

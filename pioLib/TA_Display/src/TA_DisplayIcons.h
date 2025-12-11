@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
-namespace ta {
+namespace trailair {
   namespace display {
     namespace Icons {
 
@@ -87,4 +87,4 @@ namespace ta {
 
     } // namespace Icons
   } // namespace display
-} // namespace ta
+} // namespace trailair

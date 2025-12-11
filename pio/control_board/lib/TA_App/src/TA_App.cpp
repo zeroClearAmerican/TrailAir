@@ -1,7 +1,7 @@
 #include "TA_App.h"
 #include <Arduino.h>
 
-namespace ta { namespace app {
+namespace trailair { namespace app {
 
 void App::begin() {
   Serial.println("  [App] Initializing actuators...");
@@ -14,7 +14,7 @@ void App::begin() {
   
   Serial.println("  [App] Initializing controller...");
   // Controller
-  ta::ctl::Config cfg; // defaults for now
+  trailair::controller::ControllerConfig cfg; // defaults for now
   controller_.begin(&actuators_, cfg);
   
   Serial.println("  [App] Initializing comms (ESP-NOW)...");
@@ -39,26 +39,39 @@ void App::begin() {
     Serial.println("  [App] No display configured");
   }
   
+  // Buttons (optional)
+  if (buttons_ && hasButtons_) {
+    Serial.println("  [App] Initializing buttons...");
+    buttons_->begin();
+    buttons_->subscribe(&App::onButtonStatic_, this);
+  } else {
+    Serial.println("  [App] No buttons configured");
+  }
+  
   Serial.println("  [App] Initialization complete");
 }
 
-void App::onRequestStatic_(void* ctx, const ta::protocol::Request& req) {
+void App::onRequestStatic_(void* ctx, const trailair::protocol::Request& req) {
   static_cast<App*>(ctx)->onRequest_(req);
 }
 
-void App::onRequest_(const ta::protocol::Request& req) {
-  using RK = ta::protocol::Request::Kind;
+void App::onButtonStatic_(void* ctx, const trailair::input::ButtonEvent& ev) {
+  static_cast<App*>(ctx)->onButton_(ev);
+}
+
+void App::onRequest_(const trailair::protocol::Request& req) {
+  using RK = trailair::protocol::Request::Kind;
   switch (req.kind) {
     case RK::Idle:
       controller_.cancel();
       controller_.clearError();
       break;
     case RK::Start:
-      controller_.startSeek(req.targetPsi);
+      controller_.startSeek(req.targetPSI);
       break;
     case RK::Manual:
-      if (req.manual == ta::protocol::ManualCode::Vent) controller_.manualVent(true);
-      else if (req.manual == ta::protocol::ManualCode::Air) controller_.manualAirUp(true);
+      if (req.manualMode == trailair::protocol::ManualMode::Vent) controller_.manualVent(true);
+      else if (req.manualMode == trailair::protocol::ManualMode::Air) controller_.manualAirUp(true);
       break;
     case RK::Ping:
       // no-op
@@ -66,8 +79,18 @@ void App::onRequest_(const ta::protocol::Request& req) {
   }
 }
 
+void App::onButton_(const trailair::input::ButtonEvent& ev) {
+  state_.onButton(ev, controller_);
+}
+
 void App::loop() {
   uint32_t now = millis();
+  
+  // Service buttons
+  if (buttons_ && hasButtons_) {
+    buttons_->service();
+  }
+  
   // Service comms
   comms_.service();
   // Sensor + controller
@@ -75,17 +98,17 @@ void App::loop() {
   controller_.update(now, psi);
   // Periodic status to remote (only if paired)
   if (comms_.isPaired() && (now - lastStatusMs_ >= STATUS_INTERVAL_MS_)) {
-    if (controller_.state() == ta::ctl::State::ERROR) {
-      comms_.sendError(controller_.errorByte());
+    if (controller_.getState() == trailair::controller::ControllerState::Error) {
+      comms_.sendError(controller_.getErrorByte());
     } else {
-      comms_.sendStatus(controller_.statusChar(), controller_.currentPsi());
+      comms_.sendStatus(controller_.getStatusCharacter(), controller_.getCurrentPSI());
     }
     lastStatusMs_ = now;
   }
   // Board UI state and render if display present
   state_.update(now, controller_, comms_);
   if (ui_) {
-    ta::display::DisplayModel dm;
+    trailair::display::DisplayModel dm;
     state_.buildDisplayModel(dm, controller_, comms_, now);
     ui_->render(dm);
   }
@@ -93,4 +116,4 @@ void App::loop() {
   delay(10);
 }
 
-}} // namespace ta::app
+}} // namespace trailair::app

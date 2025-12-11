@@ -7,10 +7,9 @@
 #include "TA_Protocol.h"
 #include "TA_Time.h"  // Overflow-safe time utilities
 
-namespace ta {
-namespace comms {
+namespace trailair { namespace comms {
 
-using ta::protocol::Request;
+using trailair::protocol::Request;
 
 typedef void (*RequestCallback)(void* ctx, const Request& req);
 
@@ -41,7 +40,7 @@ public:
     portEXIT_CRITICAL(&isrMux_);
     
     if (lastRx == 0) return false;
-    return ta::time::hasElapsed(millis(), lastRx, 0) && !ta::time::hasElapsed(millis(), lastRx, timeoutMs);
+    return trailair::time::hasElapsed(millis(), lastRx, 0) && !trailair::time::hasElapsed(millis(), lastRx, timeoutMs);
   }
 
 private:

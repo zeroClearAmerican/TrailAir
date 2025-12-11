@@ -1,5 +1,5 @@
 /**
- * Test-only implementation of TA_Display animation functions
+ * Test-only implementation of DisplayController animation functions
  * Extracts just the non-blocking animation state machine logic for testing
  * This avoids Arduino.h and Adafruit dependencies
  */
@@ -22,7 +22,7 @@ public:
     virtual void fillRect(int x, int y, int w, int h, uint16_t color) = 0;
 };
 
-// Test-only TA_Display that uses the interface
+// Test-only DisplayController that uses the interface
 class TA_DisplayAnim {
 public:
     explicit TA_DisplayAnim(IDisplay& d) : d_(d) {}
@@ -37,7 +37,7 @@ public:
         wipeState_.stepDelayMs = stepDelayMs;
         wipeState_.currentCol = 0;
         // Set to past time to ensure first frame draws immediately
-        wipeState_.lastStepMs = ta::time::getMillis() - stepDelayMs;
+        wipeState_.lastStepMs = trailair::time::getMilliseconds() - stepDelayMs;
         
         // Draw initial frame immediately
         updateLogoWipe();
@@ -46,10 +46,10 @@ public:
     void updateLogoWipe() {
         if (!wipeState_.active) return;
         
-        uint32_t now = ta::time::getMillis();
+        uint32_t now = trailair::time::getMilliseconds();
         
         // Check if it's time for next frame
-        if (!ta::time::hasElapsed(now, wipeState_.lastStepMs, wipeState_.stepDelayMs)) {
+        if (!trailair::time::hasElapsed(now, wipeState_.lastStepMs, wipeState_.stepDelayMs)) {
             return;  // Not time yet
         }
         
@@ -86,7 +86,7 @@ public:
                 // Non-zero delay: advance by step amount for precise timing
                 wipeState_.lastStepMs += wipeState_.stepDelayMs;
                 // Check if more frames are ready
-                continueDrawing = ta::time::hasElapsed(now, wipeState_.lastStepMs, wipeState_.stepDelayMs);
+                continueDrawing = trailair::time::hasElapsed(now, wipeState_.lastStepMs, wipeState_.stepDelayMs);
             }
             
             // Check if animation is complete

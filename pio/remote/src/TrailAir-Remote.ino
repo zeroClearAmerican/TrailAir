@@ -16,7 +16,7 @@ Adafruit_SSD1306 d_(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define BTN_UP_PIN     8
 #define BTN_RIGHT_PIN  20
 
-static ta::app::RemoteApp app({ BTN_LEFT_PIN, BTN_DOWN_PIN, BTN_UP_PIN, BTN_RIGHT_PIN, 2 }, &d_);
+static trailair::app::RemoteApp app({ BTN_LEFT_PIN, BTN_DOWN_PIN, BTN_UP_PIN, BTN_RIGHT_PIN, 2 }, &d_);
 
 void setup() {
   Serial.begin(115200);

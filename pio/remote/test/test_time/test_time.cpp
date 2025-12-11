@@ -3,7 +3,7 @@
 #include "TA_Time.h"
 #include "TA_Time_test.h"
 
-using namespace ta::time;
+using namespace trailair::time;
 
 // ============================================================================
 // Overflow Safety Tests
@@ -130,21 +130,21 @@ TEST(TimeUtils, IsTimeFor_OneMsAfterOverflow) {
 
 TEST(TimeUtils, FutureTime_NormalCase) {
     uint32_t now = 1000;
-    uint32_t future = futureTime(now, 500);
+    uint32_t future = calculateFutureTime(now, 500);
     
     EXPECT_EQ(1500u, future);
 }
 
 TEST(TimeUtils, FutureTime_ZeroDelay) {
     uint32_t now = 1000;
-    uint32_t future = futureTime(now, 0);
+    uint32_t future = calculateFutureTime(now, 0);
     
     EXPECT_EQ(1000u, future);
 }
 
 TEST(TimeUtils, FutureTime_WillOverflow) {
     uint32_t now = 0xFFFFFFF0;
-    uint32_t future = futureTime(now, 0x20);
+    uint32_t future = calculateFutureTime(now, 0x20);
     
     // Should wrap: 0xFFFFFFF0 + 0x20 = 0x00000010
     EXPECT_EQ(0x00000010u, future);
@@ -152,7 +152,7 @@ TEST(TimeUtils, FutureTime_WillOverflow) {
 
 TEST(TimeUtils, FutureTime_LargeDelay) {
     uint32_t now = 1000;
-    uint32_t future = futureTime(now, 0xFFFFFF00);
+    uint32_t future = calculateFutureTime(now, 0xFFFFFF00);
     
     // Should wrap: 1000 + 0xFFFFFF00 = 0x000002E8 (after 32-bit wraparound)
     EXPECT_EQ(0x000002E8u, future);
@@ -179,7 +179,7 @@ TEST(TimeUtils, Integration_TimeoutCheckAcrossOverflow) {
 TEST(TimeUtils, Integration_ScheduledEventAcrossOverflow) {
     // Schedule an event 5 seconds in the future, near overflow
     uint32_t now = 0xFFFFF000;
-    uint32_t eventTime = futureTime(now, 5000);
+    uint32_t eventTime = calculateFutureTime(now, 5000);
     
     // Event time should have wrapped
     EXPECT_EQ(0x00000388u, eventTime);
@@ -201,7 +201,7 @@ TEST(TimeUtils, Integration_PingBackoffPattern) {
     
     // First ping
     EXPECT_TRUE(isTimeFor(now, nextPingAt));
-    nextPingAt = futureTime(now, backoff);
+    nextPingAt = calculateFutureTime(now, backoff);
     
     // Advance time across overflow
     now = 0x00000100;
@@ -225,44 +225,44 @@ TEST(TimeUtils, Integration_ConnectionTimeout) {
 // ============================================================================
 
 TEST(MockTime, BasicUsage) {
-    ta::time::test::MockTime mockTime;
+    trailair::time::test::MockTime mockTime;
     
     mockTime.set(1000);
-    EXPECT_EQ(getMillis(), 1000u);
+    EXPECT_EQ(getMilliseconds(), 1000u);
     
     mockTime.advance(500);
-    EXPECT_EQ(getMillis(), 1500u);
+    EXPECT_EQ(getMilliseconds(), 1500u);
 }
 
 TEST(MockTime, OverflowSimulation) {
-    ta::time::test::MockTime mockTime;
+    trailair::time::test::MockTime mockTime;
     
     // Set time near overflow
     mockTime.set(0xFFFFFFF0);
-    uint32_t start = getMillis();
+    uint32_t start = getMilliseconds();
     
     // Advance past overflow
     mockTime.advance(0x20);
     
     // Verify overflow-safe functions work
-    EXPECT_TRUE(hasElapsed(getMillis(), start, 0x20));
-    EXPECT_EQ(getMillis(), 0x00000010u);
+    EXPECT_TRUE(hasElapsed(getMilliseconds(), start, 0x20));
+    EXPECT_EQ(getMilliseconds(), 0x00000010u);
 }
 
 TEST(MockTime, RealisticScenario) {
-    ta::time::test::MockTime mockTime;
+    trailair::time::test::MockTime mockTime;
     
     // Simulate connection timeout scenario
     mockTime.set(0);
-    uint32_t lastSeen = getMillis();
+    uint32_t lastSeen = getMilliseconds();
     
     // Time passes, but not enough for timeout
     mockTime.advance(4000);
-    EXPECT_FALSE(hasElapsed(getMillis(), lastSeen, 5000));
+    EXPECT_FALSE(hasElapsed(getMilliseconds(), lastSeen, 5000));
     
     // Now timeout occurs
     mockTime.advance(1001);
-    EXPECT_TRUE(hasElapsed(getMillis(), lastSeen, 5000));
+    EXPECT_TRUE(hasElapsed(getMilliseconds(), lastSeen, 5000));
 }
 
 // Run all tests

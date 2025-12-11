@@ -1,94 +1,210 @@
 #pragma once
 #include <stdint.h>
 
-namespace ta { namespace ui {
+namespace trailair {
+namespace ui {
 
-// Device-independent UI states for TrailAir
-enum class View { Idle, Manual, Seeking, Error, Disconnected, Pairing };
-
-struct UiConfig {
-  float minPsi = 0.0f;
-  float maxPsi = 50.0f;
-  float defaultTargetPsi = 32.0f;
-  float stepSmall = 1.0f;
-  uint32_t doneHoldMs = 1500;       // "Done" flash after seeking
-  uint32_t errorAutoClearMs = 4000; // optional auto-clear window
+/**
+ * @brief View states for the TrailAir user interface
+ * 
+ * Represents the current screen/mode being displayed to the user.
+ */
+enum class ViewState {
+  Idle,          ///< Default view showing current and target pressure
+  Manual,        ///< Manual control mode (direct air up/vent buttons)
+  Seeking,       ///< Automatic seeking to target pressure
+  Error,         ///< Error display mode
+  Disconnected,  ///< Remote disconnected from control board
+  Pairing        ///< Pairing mode for remote/board connection
 };
 
-// Inputs common to both devices
-enum class Button { Left, Down, Up, Right };
-enum class Action { Pressed, Released, Click, LongHold };
+/**
+ * @brief Configuration for the user interface behavior
+ */
+struct UserInterfaceConfig {
+  float minimumPSI = 0.0f;                           ///< Minimum allowed pressure in PSI
+  float maximumPSI = 50.0f;                          ///< Maximum allowed pressure in PSI
+  float defaultTargetPSI = 32.0f;                    ///< Default target pressure on startup
+  float stepSize = 1.0f;                             ///< PSI increment/decrement per button click
+  uint32_t doneHoldDurationMilliseconds = 1500;      ///< Duration to show "Done" after seeking completes
+  uint32_t errorAutoClearDurationMilliseconds = 4000; ///< Optional auto-clear window for errors (0 = disabled)
+};
 
-struct ButtonEvent { Button id; Action action; };
+/**
+ * @brief Button identifiers for the TrailAir interface
+ */
+enum class ButtonId {
+  Left,   ///< Left button (typically Cancel/Manual)
+  Down,   ///< Down button (decrease target / manual vent)
+  Up,     ///< Up button (increase target / manual air up)
+  Right   ///< Right button (typically OK/Seek)
+};
 
-// Abstract device strategy for actions; implemented by board and remote
+/**
+ * @brief Button action types
+ */
+enum class ButtonAction {
+  Pressed,   ///< Button physically pressed down
+  Released,  ///< Button physically released
+  Click,     ///< Complete click (press + release)
+  LongHold   ///< Button held for extended duration
+};
+
+/**
+ * @brief Button event containing button ID and action
+ */
+struct ButtonEvent {
+  ButtonId id;
+  ButtonAction action;
+};
+
+/**
+ * @brief Abstract interface for device-specific actions
+ * 
+ * Implemented differently by control board and remote to perform
+ * hardware-specific operations like starting compressor, opening valves, etc.
+ */
 struct DeviceActions {
   virtual ~DeviceActions() = default;
-  virtual void cancel() = 0;         // cancel manual/seek
-  virtual void clearError() = 0;     // clear/acknowledge error
-  virtual void startSeek(float targetPsi) = 0;
-  virtual void manualVent(bool on) = 0;
-  virtual void manualAirUp(bool on) = 0;
+  
+  /// @brief Cancel current manual or seek operation
+  virtual void cancel() = 0;
+  
+  /// @brief Clear/acknowledge error state
+  virtual void clearError() = 0;
+  
+  /// @brief Start automatic seeking to target pressure
+  /// @param targetPSI Target pressure in PSI
+  virtual void startSeek(float targetPSI) = 0;
+  
+  /// @brief Enable/disable manual venting
+  /// @param enable true to start venting, false to stop
+  virtual void manualVent(bool enable) = 0;
+  
+  /// @brief Enable/disable manual air up (inflation)
+  /// @param enable true to start inflating, false to stop
+  virtual void manualAirUp(bool enable) = 0;
+  
+  /// @brief Check if device is connected (remote-specific)
+  /// @return true if connected (always true for control board)
   virtual bool isConnected() const { return true; }
 };
 
-// Controller activity (mapped from concrete controllers)
-enum class Ctrl { Idle, AirUp, Venting, Checking, Error };
-
-struct UiModel {
-  // inputs for rendering layer
-  float currentPsi = 0.0f;
-  float targetPsi = 0.0f;
-  Ctrl ctrl = Ctrl::Idle;
-  View view = View::Idle;
-  bool showDoneHold = false;
-  uint8_t lastErrorCode = 0;
-  // optional fields the board/remote can ignore/fill
-  bool isConnected = true;
-  int batteryPercent = 0;
-  bool showReconnectHint = false;
-  bool pairingActive = false;
-  bool pairingFailed = false;
-  bool pairingBusy = false;
+/**
+ * @brief Controller activity states
+ * 
+ * Represents what the pressure controller is currently doing.
+ * Mapped from concrete controller implementations.
+ */
+enum class ControllerState {
+  Idle,     ///< No active pressure adjustment
+  AirUp,    ///< Actively inflating
+  Venting,  ///< Actively deflating
+  Checking, ///< Checking/stabilizing pressure
+  Error     ///< Controller in error state
 };
 
-class UiStateMachine {
-public:
-  UiStateMachine() = default;
-  explicit UiStateMachine(const UiConfig& cfg) : cfg_(cfg), targetPsi_(cfg.defaultTargetPsi) {}
+/**
+ * @brief Complete UI state model for rendering
+ * 
+ * Contains all data needed to render the display.
+ * Populated by application and consumed by display layer.
+ */
+struct UserInterfaceModel {
+  // Core pressure data
+  float currentPSI = 0.0f;                         ///< Current measured pressure
+  float targetPSI = 0.0f;                          ///< Desired target pressure
+  ControllerState controllerState = ControllerState::Idle; ///< Current controller activity
+  ViewState viewState = ViewState::Idle;           ///< Current UI view/screen
   
-  void begin(const UiConfig& cfg) { cfg_ = cfg; targetPsi_ = cfg_.defaultTargetPsi; clampTarget_(); }
+  // Status flags
+  bool showDoneHold = false;                       ///< True to show "Done" animation
+  uint8_t lastErrorCode = 0;                       ///< Last error code (0 = no error)
+  
+  // Remote-specific fields (ignored by control board)
+  bool isConnected = true;                         ///< Connection status (remote only)
+  int batteryPercent = 0;                          ///< Battery percentage (remote only)
+  bool showReconnectHint = false;                  ///< Show reconnection instructions
+  bool pairingActive = false;                      ///< Pairing in progress
+  bool pairingFailed = false;                      ///< Pairing attempt failed
+  bool pairingBusy = false;                        ///< Pairing busy/processing
+};
 
-  void update(uint32_t now, DeviceActions& dev, Ctrl ctrlState);
-  void onButton(const ButtonEvent& e, DeviceActions& dev);
+/**
+ * @brief User interface state machine
+ * 
+ * Manages UI state transitions, button handling, and view logic.
+ * Device-independent; uses DeviceActions strategy pattern for hardware operations.
+ */
+class UserInterfaceStateMachine {
+public:
+  UserInterfaceStateMachine() = default;
+  explicit UserInterfaceStateMachine(const UserInterfaceConfig& config)
+    : _config(config), _targetPSI(config.defaultTargetPSI) {}
+  
+  /// @brief Initialize with configuration
+  void begin(const UserInterfaceConfig& config) {
+    _config = config;
+    _targetPSI = _config.defaultTargetPSI;
+    clampTargetPressure();
+  }
 
-  void setTargetPsi(float psi) { targetPsi_ = psi; clampTarget_(); }
-  float targetPsi() const { return targetPsi_; }
-  View view() const { return view_; }
-  float minPsi() const { return cfg_.minPsi; }
-  float maxPsi() const { return cfg_.maxPsi; }
+  /// @brief Update state machine (call each loop)
+  /// @param now Current time in milliseconds
+  /// @param deviceActions Device-specific action handler
+  /// @param controllerState Current controller state
+  void update(uint32_t now, DeviceActions& deviceActions, ControllerState controllerState);
+  
+  /// @brief Handle button events
+  /// @param event Button event (ID + action)
+  /// @param deviceActions Device-specific action handler
+  void onButton(const ButtonEvent& event, DeviceActions& deviceActions);
 
-  // expose done-hold flag for model building
-  bool isDoneHoldActive(uint32_t now) const { return showDoneHold_ && now < doneHoldUntil_; }
+  /// @brief Set target pressure
+  void setTargetPSI(float psi) { _targetPSI = psi; clampTargetPressure(); }
+  
+  /// @brief Get current target pressure
+  float getTargetPSI() const { return _targetPSI; }
+  
+  /// @brief Get current view state
+  ViewState getViewState() const { return _viewState; }
+  
+  /// @brief Get minimum allowed pressure
+  float getMinimumPSI() const { return _config.minimumPSI; }
+  
+  /// @brief Get maximum allowed pressure
+  float getMaximumPSI() const { return _config.maximumPSI; }
+
+  /// @brief Check if "Done" animation should be shown
+  /// @param now Current time in milliseconds
+  /// @return true if done animation is active
+  bool isDoneHoldActive(uint32_t now) const {
+    return _showDoneHold && now < _doneHoldEndTime;
+  }
 
 private:
-  void clampTarget_() { if (targetPsi_ < cfg_.minPsi) targetPsi_ = cfg_.minPsi; if (targetPsi_ > cfg_.maxPsi) targetPsi_ = cfg_.maxPsi; }
+  /// @brief Clamp target pressure to configured min/max range
+  void clampTargetPressure() {
+    if (_targetPSI < _config.minimumPSI) _targetPSI = _config.minimumPSI;
+    if (_targetPSI > _config.maximumPSI) _targetPSI = _config.maximumPSI;
+  }
   
-  UiConfig cfg_{};
-  View view_ = View::Idle;
-  float targetPsi_ = 32.0f;
+  UserInterfaceConfig _config{};
+  ViewState _viewState = ViewState::Idle;
+  float _targetPSI = 32.0f;
 
-  // seeking/done
-  bool seenSeekingActivity_ = false;
-  bool showDoneHold_ = false;
-  uint32_t doneHoldUntil_ = 0;
+  // Seeking/done tracking
+  bool _hasSeenSeekingActivity = false;
+  bool _showDoneHold = false;
+  uint32_t _doneHoldEndTime = 0;
 
-  // error autoclear
-  uint32_t errorEntryMs_ = 0;
+  // Error tracking
+  uint32_t _errorEntryTime = 0;
 
-  // manual flags
-  bool manualVentActive_ = false;
-  bool manualAirActive_ = false;
+  // Manual control flags
+  bool _isManualVentActive = false;
+  bool _isManualAirActive = false;
 };
 
-}} // namespace ta::ui
+} // namespace ui
+} // namespace trailair

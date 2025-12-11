@@ -3,86 +3,96 @@
 #include <SmartButton.h>
 using namespace smartbutton;
 
-namespace ta {
+namespace trailair {
 namespace input {
 
 namespace {
-  // mapping table for SmartButton::Event -> Action
-  static inline Action mapEv(SmartButton::Event ev) {
-    switch (ev) {
-      case SmartButton::Event::PRESSED:    return Action::Pressed;
-      case SmartButton::Event::RELEASED:   return Action::Released;
-      case SmartButton::Event::CLICK:      return Action::Click;
-      case SmartButton::Event::LONG_HOLD:  return Action::LongHold;
-      default:                             return Action::Click;
+  /// Maps SmartButton events to our ButtonAction enum
+  static inline ButtonAction mapEvent(SmartButton::Event event) {
+    switch (event) {
+      case SmartButton::Event::PRESSED:    return ButtonAction::Pressed;
+      case SmartButton::Event::RELEASED:   return ButtonAction::Released;
+      case SmartButton::Event::CLICK:      return ButtonAction::Click;
+      case SmartButton::Event::LONG_HOLD:  return ButtonAction::LongHold;
+      default:                             return ButtonAction::Click;
     }
   }
 }
 
-void Buttons::begin() {
-  // Configure pins
-  pinMode(pins_.left,  INPUT_PULLUP);
-  pinMode(pins_.down,  INPUT_PULLUP);
-  pinMode(pins_.up,    INPUT_PULLUP);
-  pinMode(pins_.right, INPUT_PULLUP);
+void ButtonManager::begin() {
+  // Configure GPIO pins with pull-up resistors
+  pinMode(_pins.left,  INPUT_PULLUP);
+  pinMode(_pins.down,  INPUT_PULLUP);
+  pinMode(_pins.up,    INPUT_PULLUP);
+  pinMode(_pins.right, INPUT_PULLUP);
 
-  // Allocate SmartButtons and bind instance-aware callbacks via context
-  bLeft_  = new SmartButton(pins_.left);
-  bDown_  = new SmartButton(pins_.down);
-  bUp_    = new SmartButton(pins_.up);
-  bRight_ = new SmartButton(pins_.right);
+  // Allocate SmartButton instances and bind callbacks
+  _leftButton  = new SmartButton(_pins.left);
+  _downButton  = new SmartButton(_pins.down);
+  _upButton    = new SmartButton(_pins.up);
+  _rightButton = new SmartButton(_pins.right);
 
-  // Use the SmartButton context to pass our BtnCtx pointer
-  bLeft_->begin([](SmartButton* b, SmartButton::Event ev, int clicks){
-    auto* ctx = static_cast<BtnCtx*>(b->getContext());
-    ctx->self->onRawEvent_(ctx->id, mapEv(ev), clicks);
-  }, &ctxLeft_);
-  bDown_->begin([](SmartButton* b, SmartButton::Event ev, int clicks){
-    auto* ctx = static_cast<BtnCtx*>(b->getContext());
-    ctx->self->onRawEvent_(ctx->id, mapEv(ev), clicks);
-  }, &ctxDown_);
-  bUp_->begin([](SmartButton* b, SmartButton::Event ev, int clicks){
-    auto* ctx = static_cast<BtnCtx*>(b->getContext());
-    ctx->self->onRawEvent_(ctx->id, mapEv(ev), clicks);
-  }, &ctxUp_);
-  bRight_->begin([](SmartButton* b, SmartButton::Event ev, int clicks){
-    auto* ctx = static_cast<BtnCtx*>(b->getContext());
-    ctx->self->onRawEvent_(ctx->id, mapEv(ev), clicks);
-  }, &ctxRight_);
+  // Setup callbacks using ButtonContext to identify which button fired
+  _leftButton->begin([](SmartButton* button, SmartButton::Event event, int clickCount) {
+    auto* context = static_cast<ButtonContext*>(button->getContext());
+    context->self->onRawEvent(context->id, mapEvent(event), clickCount);
+  }, &_leftContext);
+  
+  _downButton->begin([](SmartButton* button, SmartButton::Event event, int clickCount) {
+    auto* context = static_cast<ButtonContext*>(button->getContext());
+    context->self->onRawEvent(context->id, mapEvent(event), clickCount);
+  }, &_downContext);
+  
+  _upButton->begin([](SmartButton* button, SmartButton::Event event, int clickCount) {
+    auto* context = static_cast<ButtonContext*>(button->getContext());
+    context->self->onRawEvent(context->id, mapEvent(event), clickCount);
+  }, &_upContext);
+  
+  _rightButton->begin([](SmartButton* button, SmartButton::Event event, int clickCount) {
+    auto* context = static_cast<ButtonContext*>(button->getContext());
+    context->self->onRawEvent(context->id, mapEvent(event), clickCount);
+  }, &_rightContext);
 }
 
-void Buttons::subscribe(ButtonCallback cb, void* ctx) {
-  if (!cb || subCount_ >= kMaxSubs_) return;
-  subs_[subCount_++] = { cb, ctx };
+void ButtonManager::subscribe(ButtonEventCallback callback, void* context) {
+  if (!callback || _subscriberCount >= MAX_SUBSCRIBERS) return;
+  _subscribers[_subscriberCount++] = { callback, context };
 }
 
-void Buttons::unsubscribe(ButtonCallback cb, void* ctx) {
-  for (int i = 0; i < subCount_; ++i) {
-    if (subs_[i].cb == cb && subs_[i].ctx == ctx) {
-      // Compact array
-      for (int j = i + 1; j < subCount_; ++j) subs_[j-1] = subs_[j];
-      --subCount_;
+void ButtonManager::unsubscribe(ButtonEventCallback callback, void* context) {
+  for (int i = 0; i < _subscriberCount; ++i) {
+    if (_subscribers[i].callback == callback && _subscribers[i].context == context) {
+      // Compact array by shifting elements
+      for (int j = i + 1; j < _subscriberCount; ++j) {
+        _subscribers[j - 1] = _subscribers[j];
+      }
+      --_subscriberCount;
       break;
     }
   }
 }
 
-void Buttons::clearSubscribers() {
-  subCount_ = 0;
-  for (int i = 0; i < kMaxSubs_; ++i) subs_[i] = { nullptr, nullptr };
-}
-
-void Buttons::service() {
-  SmartButton::service();
-}
-
-void Buttons::onRawEvent_(ButtonId id, Action a, int clicks) {
-  if (subCount_ == 0) return;
-  Event e{ id, a, clicks };
-  for (int i = 0; i < subCount_; ++i) {
-    if (subs_[i].cb) subs_[i].cb(subs_[i].ctx, e);
+void ButtonManager::clearSubscribers() {
+  _subscriberCount = 0;
+  for (int i = 0; i < MAX_SUBSCRIBERS; ++i) {
+    _subscribers[i] = { nullptr, nullptr };
   }
 }
 
-} // namespace input
-} // namespace ta
+void ButtonManager::service() {
+  SmartButton::service();
+}
+
+void ButtonManager::onRawEvent(ButtonId id, ButtonAction action, int clickCount) {
+  if (_subscriberCount == 0) return;
+  
+  ButtonEvent event{ id, action, clickCount };
+  for (int i = 0; i < _subscriberCount; ++i) {
+    if (_subscribers[i].callback) {
+      _subscribers[i].callback(_subscribers[i].context, event);
+    }
+  }
+}
+
+}  // namespace input
+}  // namespace trailair

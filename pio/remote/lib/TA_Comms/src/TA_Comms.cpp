@@ -1,8 +1,7 @@
 #include "TA_Comms.h"
 #include "TA_Time.h"  // Overflow-safe time utilities
 
-namespace ta {
-    namespace comms {
+namespace trailair { namespace comms {
 
         EspNowLink* EspNowLink::s_instance_ = nullptr;
 
@@ -71,34 +70,34 @@ namespace ta {
             return esp_now_add_peer(&peerInfo) == ESP_OK;
         }
 
-        bool EspNowLink::sendRaw_(const uint8_t payload[ta::protocol::kPayloadLen]) {
+        bool EspNowLink::sendRaw_(const uint8_t payload[trailair::protocol::PAYLOAD_LENGTH]) {
             if (!inited_) return false;
             if (!ensurePeer_()) return false;
-            return esp_now_send(peer_, payload, ta::protocol::kPayloadLen) == ESP_OK;
+            return esp_now_send(peer_, payload, trailair::protocol::PAYLOAD_LENGTH) == ESP_OK;
         }
 
         bool EspNowLink::sendStart(float targetPsi) {
-            uint8_t p[ta::protocol::kPayloadLen];
-            ta::protocol::Request r; r.kind = ta::protocol::Request::Kind::Start; r.targetPsi = targetPsi;
-            ta::protocol::packRequest(p, r);
+            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
+            trailair::protocol::Request r; r.kind = trailair::protocol::Request::Kind::Start; r.targetPSI = targetPsi;
+            trailair::protocol::packRequest(p, r);
             return sendRaw_(p);
         }
         bool EspNowLink::sendCancel() {
-            uint8_t p[ta::protocol::kPayloadLen];
-            ta::protocol::Request r; r.kind = ta::protocol::Request::Kind::Idle;
-            ta::protocol::packRequest(p, r);
+            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
+            trailair::protocol::Request r; r.kind = trailair::protocol::Request::Kind::Idle;
+            trailair::protocol::packRequest(p, r);
             return sendRaw_(p);
         }
         bool EspNowLink::sendManual(uint8_t code) {
-            uint8_t p[ta::protocol::kPayloadLen];
-            ta::protocol::Request r; r.kind = ta::protocol::Request::Kind::Manual; r.manual = static_cast<ta::protocol::ManualCode>(code);
-            ta::protocol::packRequest(p, r);
+            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
+            trailair::protocol::Request r; r.kind = trailair::protocol::Request::Kind::Manual; r.manualMode = static_cast<trailair::protocol::ManualMode>(code);
+            trailair::protocol::packRequest(p, r);
             return sendRaw_(p);
         }
         bool EspNowLink::sendPing() {
-            uint8_t p[ta::protocol::kPayloadLen];
-            ta::protocol::Request r; r.kind = ta::protocol::Request::Kind::Ping;
-            ta::protocol::packRequest(p, r);
+            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
+            trailair::protocol::Request r; r.kind = trailair::protocol::Request::Kind::Ping;
+            trailair::protocol::packRequest(p, r);
             return sendRaw_(p);
         }
 
@@ -197,7 +196,7 @@ namespace ta {
             if (pairing_) return false;
             pairing_ = true;
             pairingGroupId_ = groupId;
-            pairingTimeoutAt_ = ta::time::futureTime(ta::time::getMillis(), timeoutMs);
+            pairingTimeoutAt_ = trailair::time::calculateFutureTime(trailair::time::getMilliseconds(), timeoutMs);
             nextPairReqAt_ = 0;
             pairReqIntervalMs_ = 500;
             ensureBroadcastPeer_();
@@ -217,18 +216,18 @@ namespace ta {
         }
 
         bool EspNowLink::sendPairReq_() {
-            uint8_t p[ta::protocol::kPayloadLen];
-            ta::protocol::packPairReq(p, pairingGroupId_);
+            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
+            trailair::protocol::packPairingRequest(p, pairingGroupId_);
             uint8_t bcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
-            return esp_now_send(bcast, p, ta::protocol::kPayloadLen) == ESP_OK;
+            return esp_now_send(bcast, p, trailair::protocol::PAYLOAD_LENGTH) == ESP_OK;
         }
 
-        void EspNowLink::handlePairFrame_(const uint8_t* mac, const ta::protocol::PairMsg& pm) {
-            using namespace ta::protocol;
+        void EspNowLink::handlePairFrame_(const uint8_t* mac, const trailair::protocol::PairingMessage& pm) {
+            using namespace trailair::protocol;
             if (!pairing_) return;
 
-            switch (pm.op) {
-                case PairOp::Ack:
+            switch (pm.operation) {
+                case PairingOperation::Acknowledge:
                     if (pm.value == pairingGroupId_) {
                         stopPairing_(PairEvent::Acked, mac);   // Acked first
                         
@@ -256,7 +255,7 @@ namespace ta {
                         requestReconnect(); // start normal connection attempts
                     }
                     break;
-                case PairOp::Busy:
+                case PairingOperation::Busy:
                     stopPairing_(PairEvent::Busy, mac);
                     break;
                 default:
@@ -265,7 +264,7 @@ namespace ta {
         }
 
         void EspNowLink::service() {
-            uint32_t now = ta::time::getMillis();
+            uint32_t now = trailair::time::getMilliseconds();
 
             // Skip ping logic while pairing (optional)
             if (!pairing_) {
@@ -275,27 +274,27 @@ namespace ta {
                 lastSeen = lastSeenMs_;
                 portEXIT_CRITICAL(&isrMux_);
 
-                if (isConnected_ && ta::time::hasElapsed(now, lastSeen, connectionTimeoutMs_)) {
+                if (isConnected_ && trailair::time::hasElapsed(now, lastSeen, connectionTimeoutMs_)) {
                     isConnected_ = false;
         #if TA_COMMS_DEBUG
                     Serial.println("Connection lost.");
         #endif
                 }
                 if (isConnecting_ && !isConnected_) {
-                    if (ta::time::isTimeFor(now, nextPingAtMs_)) {
+                    if (trailair::time::isTimeFor(now, nextPingAtMs_)) {
                         sendPing();
-                        nextPingAtMs_ = ta::time::futureTime(now, pingBackoffMs_);
+                        nextPingAtMs_ = trailair::time::calculateFutureTime(now, pingBackoffMs_);
                         pingBackoffMs_ = min(pingBackoffMs_ * 2, pingBackoffMaxMs_);
                     }
                 }
             }
 
             if (pairing_) {
-                if (ta::time::isTimeFor(now, pairingTimeoutAt_)) {
+                if (trailair::time::isTimeFor(now, pairingTimeoutAt_)) {
                     stopPairing_(PairEvent::Timeout, peer_);
-                } else if (ta::time::isTimeFor(now, nextPairReqAt_)) {
+                } else if (trailair::time::isTimeFor(now, nextPairReqAt_)) {
                     sendPairReq_();
-                    nextPairReqAt_ = ta::time::futureTime(now, pairReqIntervalMs_);
+                    nextPairReqAt_ = trailair::time::calculateFutureTime(now, pairReqIntervalMs_);
                 }
             }
         }
@@ -308,12 +307,12 @@ namespace ta {
         }
 
         void EspNowLink::onRecv(const uint8_t* mac, const uint8_t* data, int len) {
-          using namespace ta::protocol;
+          using namespace trailair::protocol;
 
           // Pairing frames
           if (isPairingFrame(data, len)) {
-            PairMsg pm;
-            if (parsePair(data, len, pm)) {
+            PairingMessage pm;
+            if (parsePairingMessage(data, len, pm)) {
               handlePairFrame_(mac, pm);
               return;
             }

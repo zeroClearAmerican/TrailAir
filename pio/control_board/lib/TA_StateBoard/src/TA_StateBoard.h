@@ -3,12 +3,11 @@
 #include "TA_Controller.h"
 #include "TA_CommsBoard.h"
 #include "TA_Input.h"
-#include "TA_Display.h"
+#include <TA_Display.h>
 #include <TA_UI.h>
 #include <TA_Config.h>
 
-namespace ta {
-  namespace stateboard {
+namespace trailair { namespace stateboard {
 
     class StateBoard {
     public:
@@ -25,23 +24,23 @@ namespace ta {
       void begin(const Config& cfg);
 
       // Button events forwarded from sketch (same ordering as remote: Left, Down, Up, Right).
-      void onButton(const ta::input::Event& ev, ta::ctl::Controller& controller);
+      void onButton(const trailair::input::ButtonEvent& ev, trailair::controller::PressureController& controller);
 
       // Called each loop.
       void update(uint32_t now,
-                  ta::ctl::Controller& controller,
-                  const ta::comms::BoardLink& link);
+                  trailair::controller::PressureController& controller,
+                  const trailair::comms::BoardLink& link);
 
       // Fill display model (reusing existing rendering pipeline).
-      void buildDisplayModel(ta::display::DisplayModel& m,
-                             const ta::ctl::Controller& controller,
-                             const ta::comms::BoardLink& link,
+      void buildDisplayModel(trailair::display::DisplayModel& m,
+                             const trailair::controller::PressureController& controller,
+                             const trailair::comms::BoardLink& link,
                              uint32_t now) const;
 
-      float targetPsi() const { return ui_.targetPsi(); }
+      float targetPsi() const { return ui_.getTargetPSI(); }
       UiState uiState() const {
-        using V = ta::ui::View;
-        switch (ui_.view()) {
+        using V = trailair::ui::ViewState;
+        switch (ui_.getViewState()) {
           case V::Idle: return UiState::Idle;
           case V::Manual: return UiState::Manual;
           case V::Seeking: return UiState::Seeking;
@@ -52,8 +51,8 @@ namespace ta {
 
     private:
       // Bridge concrete controller to shared UI actions
-      struct BoardActions : ta::ui::DeviceActions {
-        ta::ctl::Controller* ctl = nullptr;
+      struct BoardActions : trailair::ui::DeviceActions {
+        trailair::controller::PressureController* ctl = nullptr;
         bool isConnected() const override { return true; }
         void cancel() override { if (ctl) ctl->cancel(); }
         void clearError() override { if (ctl) ctl->clearError(); }
@@ -63,11 +62,11 @@ namespace ta {
       };
 
       Config cfg_{};
-      ta::ui::UiStateMachine ui_{};
+      trailair::ui::UserInterfaceStateMachine ui_{};
 
       // helper conversions
-      static ta::ui::Ctrl toUiCtrl_(ta::ctl::State s);
-      static ta::ui::ButtonEvent toUiBtn_(const ta::input::Event& ev);
+      static trailair::ui::ControllerState toUiCtrl_(trailair::controller::ControllerState s);
+      static trailair::ui::ButtonEvent toUiBtn_(const trailair::input::ButtonEvent& ev);
     };
 
   } // namespace stateboard

@@ -1,6 +1,6 @@
 /**
  * Unit tests for TA_Controller
- * Tests state machine logic, PSI seeking, error handling, and manual control
+ * Tests ControllerState machine logic, PSI seeking, error handling, and manual control
  */
 
 #include <gtest/gtest.h>
@@ -10,9 +10,9 @@
 using namespace ta::ctl;
 
 // ============================================================================
-// Mock Outputs - Tracks what the controller commands
+// Mock Outputs - Tracks what the PressureController commands
 // ============================================================================
-class MockOutputs : public IOutputs {
+class MockOutputs : public IActuatorOutputs {
 public:
     bool compressorOn = false;
     bool ventOpen = false;
@@ -49,14 +49,14 @@ public:
 class ControllerTest : public ::testing::Test {
 protected:
     MockOutputs outputs;
-    Controller controller;
-    Config cfg;
+    PressureController PressureController;
+    ControllerConfig cfg;
 
     void SetUp() override {
         // Use fast timings for unit tests
-        cfg.minPsi = 5.0f;
-        cfg.maxPsi = 50.0f;
-        cfg.psiTol = 0.5f;
+        cfg.minimumPSI = 5.0f;
+        cfg.maximumPSI = 50.0f;
+        cfg.pressureTolerancePSI = 0.5f;
         cfg.settleMs = 100;
         cfg.burstMsInit = 500;
         cfg.runMinMs = 100;
@@ -70,7 +70,7 @@ protected:
         cfg.rateMinEps = 0.001f;
         cfg.checkDtMinSec = 0.02f;
 
-        controller.begin(&outputs, cfg);
+        PressureController.begin(&outputs, cfg);
         outputs.reset();
     }
 };
@@ -79,143 +79,143 @@ protected:
 // Initialization Tests
 // ============================================================================
 TEST_F(ControllerTest, InitialState) {
-    EXPECT_EQ(controller.state(), State::IDLE);
-    EXPECT_EQ(controller.error(), ErrorCode::NONE);
-    EXPECT_FLOAT_EQ(controller.targetPsi(), 0.0f);
-    EXPECT_FLOAT_EQ(controller.currentPsi(), 0.0f);
+    EXPECT_EQ(PressureController.getState(), ControllerState::IDLE);
+    EXPECT_EQ(PressureController.getError(), ErrorCode::NONE);
+    EXPECT_FLOAT_EQ(PressureController.getTargetPSI(), 0.0f);
+    EXPECT_FLOAT_EQ(PressureController.getCurrentPSI(), 0.0f);
 }
 
 TEST_F(ControllerTest, StatusCharMapping) {
-    controller.update(0, 10.0f);
-    EXPECT_EQ(controller.statusChar(), 'I'); // Idle
+    PressureController.update(0, 10.0f);
+    EXPECT_EQ(PressureController.getStatusCharacter(), 'I'); // Idle
 }
 
 // ============================================================================
 // PSI Clamping Tests
 // ============================================================================
 TEST_F(ControllerTest, StartSeek_ClampsMinPsi) {
-    controller.startSeek(2.0f); // Below min
-    EXPECT_FLOAT_EQ(controller.targetPsi(), cfg.minPsi);
+    PressureController.startSeek(2.0f); // Below min
+    EXPECT_FLOAT_EQ(PressureController.getTargetPSI(), cfg.minimumPSI);
 }
 
 TEST_F(ControllerTest, StartSeek_ClampsMaxPsi) {
-    controller.startSeek(100.0f); // Above max
-    EXPECT_FLOAT_EQ(controller.targetPsi(), cfg.maxPsi);
+    PressureController.startSeek(100.0f); // Above max
+    EXPECT_FLOAT_EQ(PressureController.getTargetPSI(), cfg.maximumPSI);
 }
 
 TEST_F(ControllerTest, StartSeek_WithinRange) {
-    controller.startSeek(25.0f);
-    EXPECT_FLOAT_EQ(controller.targetPsi(), 25.0f);
+    PressureController.startSeek(25.0f);
+    EXPECT_FLOAT_EQ(PressureController.getTargetPSI(), 25.0f);
 }
 
 // ============================================================================
 // Seeking - Air Up Tests
 // ============================================================================
 TEST_F(ControllerTest, StartSeek_AirUp_StartsCompressor) {
-    controller.update(0, 10.0f);
-    controller.startSeek(20.0f);
+    PressureController.update(0, 10.0f);
+    PressureController.startSeek(20.0f);
 
-    EXPECT_EQ(controller.state(), State::AIRUP);
+    EXPECT_EQ(PressureController.getState(), ControllerState::AIRUP);
     EXPECT_TRUE(outputs.compressorOn);
     EXPECT_FALSE(outputs.ventOpen);
 }
 
 TEST_F(ControllerTest, Seek_AirUp_ReachesTarget) {
     uint32_t time = 0;
-    controller.update(time, 10.0f);
-    controller.startSeek(20.0f);
+    PressureController.update(time, 10.0f);
+    PressureController.startSeek(20.0f);
 
     // Simulate PSI rising
     time += 600; // End burst
-    controller.update(time, 15.0f);
-    EXPECT_EQ(controller.state(), State::CHECKING);
+    PressureController.update(time, 15.0f);
+    EXPECT_EQ(PressureController.getState(), ControllerState::CHECKING);
 
     time += 150; // Settle period
-    controller.update(time, 15.0f);
+    PressureController.update(time, 15.0f);
 
     // Should schedule another burst
-    EXPECT_TRUE(controller.state() == State::AIRUP || controller.state() == State::CHECKING);
+    EXPECT_TRUE(PressureController.getState() == ControllerState::AIRUP || PressureController.getState() == ControllerState::CHECKING);
 }
 
 TEST_F(ControllerTest, Seek_ReachesTolerance_GoesIdle) {
     uint32_t time = 0;
-    controller.update(time, 19.6f);
-    controller.startSeek(20.0f);
+    PressureController.update(time, 19.6f);
+    PressureController.startSeek(20.0f);
 
     // Within tolerance already
-    EXPECT_EQ(controller.state(), State::IDLE);
+    EXPECT_EQ(PressureController.getState(), ControllerState::IDLE);
 }
 
 // ============================================================================
 // Seeking - Venting Tests
 // ============================================================================
 TEST_F(ControllerTest, StartSeek_Venting_OpensVent) {
-    controller.update(0, 30.0f);
-    controller.startSeek(20.0f);
+    PressureController.update(0, 30.0f);
+    PressureController.startSeek(20.0f);
 
-    EXPECT_EQ(controller.state(), State::VENTING);
+    EXPECT_EQ(PressureController.getState(), ControllerState::VENTING);
     EXPECT_FALSE(outputs.compressorOn);
     EXPECT_TRUE(outputs.ventOpen);
 }
 
 TEST_F(ControllerTest, Seek_Venting_ReachesTarget) {
     uint32_t time = 0;
-    controller.update(time, 30.0f);
-    controller.startSeek(20.0f);
+    PressureController.update(time, 30.0f);
+    PressureController.startSeek(20.0f);
 
     // Simulate PSI dropping
     time += 600;
-    controller.update(time, 25.0f);
-    EXPECT_EQ(controller.state(), State::CHECKING);
+    PressureController.update(time, 25.0f);
+    EXPECT_EQ(PressureController.getState(), ControllerState::CHECKING);
 
     time += 150;
-    controller.update(time, 25.0f);
+    PressureController.update(time, 25.0f);
 }
 
 // ============================================================================
 // Manual Control Tests
 // ============================================================================
 TEST_F(ControllerTest, ManualAirUp_ActivatesCompressor) {
-    controller.manualAirUp(true);
+    PressureController.manualAirUp(true);
 
-    EXPECT_EQ(controller.state(), State::AIRUP);
+    EXPECT_EQ(PressureController.getState(), ControllerState::AIRUP);
     EXPECT_TRUE(outputs.compressorOn);
     EXPECT_FALSE(outputs.ventOpen);
 }
 
 TEST_F(ControllerTest, ManualAirUp_Deactivate_StopsCompressor) {
-    controller.manualAirUp(true);
-    controller.manualAirUp(false);
+    PressureController.manualAirUp(true);
+    PressureController.manualAirUp(false);
 
-    EXPECT_EQ(controller.state(), State::IDLE);
+    EXPECT_EQ(PressureController.getState(), ControllerState::IDLE);
     EXPECT_FALSE(outputs.compressorOn);
 }
 
 TEST_F(ControllerTest, ManualVent_OpensVent) {
-    controller.manualVent(true);
+    PressureController.manualVent(true);
 
-    EXPECT_EQ(controller.state(), State::VENTING);
+    EXPECT_EQ(PressureController.getState(), ControllerState::VENTING);
     EXPECT_FALSE(outputs.compressorOn);
     EXPECT_TRUE(outputs.ventOpen);
 }
 
 TEST_F(ControllerTest, ManualVent_Deactivate_ClosesVent) {
-    controller.manualVent(true);
-    controller.manualVent(false);
+    PressureController.manualVent(true);
+    PressureController.manualVent(false);
 
-    EXPECT_EQ(controller.state(), State::IDLE);
+    EXPECT_EQ(PressureController.getState(), ControllerState::IDLE);
     EXPECT_FALSE(outputs.ventOpen);
 }
 
 TEST_F(ControllerTest, Manual_TimesOutWithoutRefresh) {
     uint32_t time = 0;
-    controller.manualAirUp(true);
+    PressureController.manualAirUp(true);
     
     // Advance time beyond timeout
     time += cfg.manualRefreshTimeoutMs + 100;
-    controller.update(time, 10.0f);
+    PressureController.update(time, 10.0f);
 
-    EXPECT_EQ(controller.state(), State::IDLE);
+    EXPECT_EQ(PressureController.getState(), ControllerState::IDLE);
     EXPECT_FALSE(outputs.compressorOn);
 }
 
@@ -226,62 +226,62 @@ TEST_F(ControllerTest, Manual_TimesOutWithoutRefresh) {
 // Cancel and Clear Tests
 // ============================================================================
 TEST_F(ControllerTest, Cancel_StopsSeek) {
-    controller.update(0, 10.0f);
-    controller.startSeek(20.0f);
-    EXPECT_EQ(controller.state(), State::AIRUP);
+    PressureController.update(0, 10.0f);
+    PressureController.startSeek(20.0f);
+    EXPECT_EQ(PressureController.getState(), ControllerState::AIRUP);
 
-    controller.cancel();
+    PressureController.cancel();
 
-    EXPECT_EQ(controller.state(), State::IDLE);
+    EXPECT_EQ(PressureController.getState(), ControllerState::IDLE);
     EXPECT_FALSE(outputs.compressorOn);
-    EXPECT_FLOAT_EQ(controller.targetPsi(), 0.0f);
+    EXPECT_FLOAT_EQ(PressureController.getTargetPSI(), 0.0f);
 }
 
 TEST_F(ControllerTest, Cancel_StopsManual) {
-    controller.manualAirUp(true);
-    EXPECT_EQ(controller.state(), State::AIRUP);
+    PressureController.manualAirUp(true);
+    EXPECT_EQ(PressureController.getState(), ControllerState::AIRUP);
 
-    controller.cancel();
+    PressureController.cancel();
 
-    EXPECT_EQ(controller.state(), State::IDLE);
+    EXPECT_EQ(PressureController.getState(), ControllerState::IDLE);
     EXPECT_FALSE(outputs.compressorOn);
 }
 
 TEST_F(ControllerTest, Cancel_DoesNotClearError) {
-    // Force error state
-    controller.update(0, 10.0f);
-    controller.startSeek(20.0f);
+    // Force error ControllerState
+    PressureController.update(0, 10.0f);
+    PressureController.startSeek(20.0f);
     
     // Simulate no-change error by not changing PSI
     for (int i = 0; i < cfg.maxNoChangeBursts + 1; i++) {
         uint32_t time = i * 1000;
-        controller.update(time, 10.0f); // Start
-        controller.update(time + 600, 10.0f); // End burst
-        controller.update(time + 800, 10.0f); // After settle
+        PressureController.update(time, 10.0f); // Start
+        PressureController.update(time + 600, 10.0f); // End burst
+        PressureController.update(time + 800, 10.0f); // After settle
     }
     
-    if (controller.state() == State::ERROR) {
-        controller.cancel();
-        EXPECT_EQ(controller.state(), State::ERROR); // Still in error
+    if (PressureController.getState() == ControllerState::ERROR) {
+        PressureController.cancel();
+        EXPECT_EQ(PressureController.getState(), ControllerState::ERROR); // Still in error
     }
 }
 
 TEST_F(ControllerTest, ClearError_ResetsToIdle) {
-    // Manually set error state by exhausting no-change bursts
-    controller.update(0, 10.0f);
-    controller.startSeek(20.0f);
+    // Manually set error ControllerState by exhausting no-change bursts
+    PressureController.update(0, 10.0f);
+    PressureController.startSeek(20.0f);
     
     for (int i = 0; i < cfg.maxNoChangeBursts + 1; i++) {
         uint32_t time = i * 1000;
-        controller.update(time, 10.0f);
-        controller.update(time + 600, 10.0f);
-        controller.update(time + 800, 10.0f);
+        PressureController.update(time, 10.0f);
+        PressureController.update(time + 600, 10.0f);
+        PressureController.update(time + 800, 10.0f);
     }
     
-    if (controller.state() == State::ERROR) {
-        controller.clearError();
-        EXPECT_EQ(controller.state(), State::IDLE);
-        EXPECT_EQ(controller.error(), ErrorCode::NONE);
+    if (PressureController.getState() == ControllerState::ERROR) {
+        PressureController.clearError();
+        EXPECT_EQ(PressureController.getState(), ControllerState::IDLE);
+        EXPECT_EQ(PressureController.getError(), ErrorCode::NONE);
     }
 }
 
@@ -289,82 +289,82 @@ TEST_F(ControllerTest, ClearError_ResetsToIdle) {
 // Error Condition Tests
 // ============================================================================
 TEST_F(ControllerTest, Error_NoChange_AfterMaxBursts) {
-    controller.update(0, 10.0f);
-    controller.startSeek(20.0f);
+    PressureController.update(0, 10.0f);
+    PressureController.startSeek(20.0f);
     
     // Run bursts with no PSI change
     for (int i = 0; i < cfg.maxNoChangeBursts + 1; i++) {
         uint32_t time = i * 1000;
-        controller.update(time, 10.0f); // Same PSI
-        controller.update(time + 600, 10.0f);
-        controller.update(time + 800, 10.0f);
+        PressureController.update(time, 10.0f); // Same PSI
+        PressureController.update(time + 600, 10.0f);
+        PressureController.update(time + 800, 10.0f);
     }
     
     // Should eventually error (implementation-dependent timing)
-    bool hasErrored = controller.state() == State::ERROR;
+    bool hasErrored = PressureController.getState() == ControllerState::ERROR;
     if (hasErrored) {
-        EXPECT_EQ(controller.error(), ErrorCode::NO_CHANGE);
+        EXPECT_EQ(PressureController.getError(), ErrorCode::NO_CHANGE);
     }
 }
 
 // ============================================================================
-// State Transition Tests
+// ControllerState Transition Tests
 // ============================================================================
 TEST_F(ControllerTest, StateTransition_BurstToChecking) {
     uint32_t time = 0;
-    controller.update(time, 10.0f);
-    controller.startSeek(20.0f);
-    EXPECT_EQ(controller.state(), State::AIRUP);
+    PressureController.update(time, 10.0f);
+    PressureController.startSeek(20.0f);
+    EXPECT_EQ(PressureController.getState(), ControllerState::AIRUP);
 
     // Wait for burst to complete
     time += cfg.burstMsInit + 50;
-    controller.update(time, 12.0f);
-    EXPECT_EQ(controller.state(), State::CHECKING);
+    PressureController.update(time, 12.0f);
+    EXPECT_EQ(PressureController.getState(), ControllerState::CHECKING);
 }
 
 TEST_F(ControllerTest, StateTransition_CheckingToIdle_AtTarget) {
     uint32_t time = 0;
-    controller.update(time, 19.0f);
-    controller.startSeek(20.0f);
+    PressureController.update(time, 19.0f);
+    PressureController.startSeek(20.0f);
     
     time += cfg.burstMsInit + 50;
-    controller.update(time, 19.8f); // Within tolerance
+    PressureController.update(time, 19.8f); // Within tolerance
     
     time += cfg.settleMs + 50;
-    controller.update(time, 20.0f); // At target
+    PressureController.update(time, 20.0f); // At target
     
-    EXPECT_EQ(controller.state(), State::IDLE);
+    EXPECT_EQ(PressureController.getState(), ControllerState::IDLE);
 }
 
 // ============================================================================
 // Edge Cases
 // ============================================================================
 TEST_F(ControllerTest, Update_WithoutBegin_DoesNotCrash) {
-    Controller ctrl;
+    PressureController ctrl;
     ctrl.update(0, 10.0f); // Should not crash
 }
 
 TEST_F(ControllerTest, MultipleSeeks_ResetsState) {
-    controller.update(0, 10.0f);
-    controller.startSeek(20.0f);
+    PressureController.update(0, 10.0f);
+    PressureController.startSeek(20.0f);
     
     uint32_t time = 100;
-    controller.update(time, 12.0f);
+    PressureController.update(time, 12.0f);
     
     // Start new seek
-    controller.startSeek(15.0f);
-    EXPECT_FLOAT_EQ(controller.targetPsi(), 15.0f);
+    PressureController.startSeek(15.0f);
+    EXPECT_FLOAT_EQ(PressureController.getTargetPSI(), 15.0f);
 }
 
 TEST_F(ControllerTest, SeekToCurrentPsi_StaysIdle) {
-    controller.update(0, 20.0f);
-    controller.startSeek(20.0f); // Already at target
+    PressureController.update(0, 20.0f);
+    PressureController.startSeek(20.0f); // Already at target
     
-    EXPECT_EQ(controller.state(), State::IDLE);
+    EXPECT_EQ(PressureController.getState(), ControllerState::IDLE);
 }
 
 TEST_F(ControllerTest, ErrorByte_MapsToProtocol) {
-    EXPECT_EQ(controller.errorByte(), 0); // NONE
+    EXPECT_EQ(PressureController.getErrorByte(), 0); // NONE
 }
 
 // ============================================================================
@@ -372,20 +372,20 @@ TEST_F(ControllerTest, ErrorByte_MapsToProtocol) {
 // ============================================================================
 TEST_F(ControllerTest, RateLearning_ImprovesBurstTiming) {
     uint32_t time = 0;
-    controller.update(time, 10.0f);
-    controller.startSeek(30.0f);
+    PressureController.update(time, 10.0f);
+    PressureController.startSeek(30.0f);
     
     // First burst
     time += cfg.burstMsInit + 50;
-    controller.update(time, 12.0f); // +2 PSI
-    EXPECT_EQ(controller.state(), State::CHECKING);
+    PressureController.update(time, 12.0f); // +2 PSI
+    EXPECT_EQ(PressureController.getState(), ControllerState::CHECKING);
     
     // Should learn rate and schedule next burst
     time += cfg.settleMs + 50;
-    controller.update(time, 12.0f);
+    PressureController.update(time, 12.0f);
     
-    // Verify controller is still working toward target
-    EXPECT_NE(controller.state(), State::ERROR);
+    // Verify PressureController is still working toward target
+    EXPECT_NE(PressureController.getState(), ControllerState::ERROR);
 }
 
 // ============================================================================

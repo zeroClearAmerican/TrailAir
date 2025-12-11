@@ -7,10 +7,9 @@
 #include <TA_UI.h>
 #include <TA_Config.h>
 
-namespace ta {
-namespace state {
+namespace trailair { namespace state {
 
-StateController::StateController(ta::comms::EspNowLink& link, const Config& cfg)
+StateController::StateController(trailair::comms::EspNowLink& link, const Config& cfg)
   : link_(link) {
   // Ensure config pointers are valid by falling back to defaults
   static const trailair::config::UserInterfaceConfiguration kUiDefaults{};
@@ -18,13 +17,13 @@ StateController::StateController(ta::comms::EspNowLink& link, const Config& cfg)
   cfg_.ui = cfg.ui ? cfg.ui : &kUiDefaults;
   cfg_.link = cfg.link ? cfg.link : &kLinkDefaults;
 
-  ta::ui::UiConfig uic;
-  uic.minPsi = cfg_.ui->minimumPressurePSI;
-  uic.maxPsi = cfg_.ui->maximumPressurePSI;
-  uic.defaultTargetPsi = cfg_.ui->defaultTargetPressurePSI;
-  uic.stepSmall = cfg_.ui->pressureStepSmallPSI;
-  uic.doneHoldMs = cfg_.ui->doneHoldDurationMilliseconds;
-  uic.errorAutoClearMs = cfg_.ui->errorAutoClearDurationMilliseconds;
+  trailair::ui::UserInterfaceConfig uic;
+  uic.minimumPSI = cfg_.ui->minimumPressurePSI;
+  uic.maximumPSI = cfg_.ui->maximumPressurePSI;
+  uic.defaultTargetPSI = cfg_.ui->defaultTargetPressurePSI;
+  uic.stepSize = cfg_.ui->pressureStepSmallPSI;
+  uic.doneHoldDurationMilliseconds = cfg_.ui->doneHoldDurationMilliseconds;
+  uic.errorAutoClearDurationMilliseconds = cfg_.ui->errorAutoClearDurationMilliseconds;
   ui_.begin(uic);
 }
 
@@ -52,24 +51,24 @@ void StateController::onBatteryPercent(int percent) {
   batteryPercent_ = constrain(percent, 0, 100);
 }
 
-void StateController::onStatus(const ta::protocol::Response& msg) {
-  using ta::protocol::Status;
-  if (msg.status != Status::Error) {
-    currentPsi_ = ta::protocol::byteToPsi05(msg.value);
+void StateController::onStatus(const trailair::protocol::Response& msg) {
+  using trailair::protocol::StatusCode;
+  if (msg.status != StatusCode::Error) {
+    currentPsi_ = trailair::protocol::convertByteToPSI(msg.value);
   } else {
     lastErrorCode_ = msg.value;
   }
 
   switch (msg.status) {
-    case Status::Idle:     cState_ = ControlState::IDLE;     break;
-    case Status::AirUp:    cState_ = ControlState::AIRUP;    break;
-    case Status::Venting:  cState_ = ControlState::VENTING;  break;
-    case Status::Checking: cState_ = ControlState::CHECKING; break;
-    case Status::Error:    cState_ = ControlState::ERROR;    break;
+    case StatusCode::Idle:     cState_ = ControlState::IDLE;     break;
+    case StatusCode::AirUp:    cState_ = ControlState::AIRUP;    break;
+    case StatusCode::Venting:  cState_ = ControlState::VENTING;  break;
+    case StatusCode::Checking: cState_ = ControlState::CHECKING; break;
+    case StatusCode::Error:    cState_ = ControlState::ERROR;    break;
   }
 
   // Leave ERROR view when board recovers
-  if (rState_ == RemoteState::ERROR && msg.status != Status::Error) {
+  if (rState_ == RemoteState::ERROR && msg.status != StatusCode::Error) {
     errorClearRequested_ = false; // allow future auto-clears
     enter_(RemoteState::IDLE, millis());
   }
@@ -92,17 +91,17 @@ void StateController::update(uint32_t now, bool isConnected, bool isConnecting) 
   ui_.update(now, ra, toUiCtrl(cState_));
 
   // Keep rState_ aligned with shared view
-  switch (ui_.view()) {
-    case ta::ui::View::Idle:         rState_ = RemoteState::IDLE; break;
-    case ta::ui::View::Manual:       rState_ = RemoteState::MANUAL; break;
-    case ta::ui::View::Seeking:      rState_ = RemoteState::SEEKING; break;
-    case ta::ui::View::Error:        rState_ = RemoteState::ERROR; break;
-    case ta::ui::View::Disconnected: rState_ = RemoteState::DISCONNECTED; break;
-    case ta::ui::View::Pairing:      rState_ = RemoteState::PAIRING; break;
+  switch (ui_.getViewState()) {
+    case trailair::ui::ViewState::Idle:         rState_ = RemoteState::IDLE; break;
+    case trailair::ui::ViewState::Manual:       rState_ = RemoteState::MANUAL; break;
+    case trailair::ui::ViewState::Seeking:      rState_ = RemoteState::SEEKING; break;
+    case trailair::ui::ViewState::Error:        rState_ = RemoteState::ERROR; break;
+    case trailair::ui::ViewState::Disconnected: rState_ = RemoteState::DISCONNECTED; break;
+    case trailair::ui::ViewState::Pairing:      rState_ = RemoteState::PAIRING; break;
   }
 
   // Manual resend while truly in Manual
-  if (ui_.view() == ta::ui::View::Manual && manualSending_) {
+  if (ui_.getViewState() == trailair::ui::ViewState::Manual && manualSending_) {
     if (now - lastManualSentMs_ >= cfg_.link->manualRepeatIntervalMilliseconds) {
       link_.sendManual(manualCode_);
       lastManualSentMs_ = now;
@@ -110,7 +109,7 @@ void StateController::update(uint32_t now, bool isConnected, bool isConnecting) 
   }
 
   // If we left Manual due to error or other transitions, stop manual stream
-  if (ui_.view() != ta::ui::View::Manual && manualSending_) {
+  if (ui_.getViewState() != trailair::ui::ViewState::Manual && manualSending_) {
     link_.sendCancel();
     manualSending_ = false;
     lastManualSentMs_ = 0;
@@ -145,7 +144,7 @@ void StateController::enter_(RemoteState s, uint32_t now) {
       break;
     case RemoteState::ERROR:
       if (!errorClearRequested_) {
-        // Will be auto-cleared by UiStateMachine via DeviceActions::clearError()
+        // Will be auto-cleared by UserInterfaceStateMachine via DeviceActions::clearError()
         errorClearRequested_ = true;
       }
       break;
@@ -156,15 +155,15 @@ void StateController::enter_(RemoteState s, uint32_t now) {
   }
 }
 
-void StateController::onButton(const ta::input::Event& e) {
+void StateController::onButton(const trailair::input::ButtonEvent& e) {
   uint32_t now = millis();
 
   // Left sleep long-hold handling remains remote-specific
-  if (e.id == ta::input::ButtonId::Left) {
-    if (e.action == ta::input::Action::Pressed) leftPressed_ = true;
-    else if (e.action == ta::input::Action::Released) leftPressed_ = false;
+  if (e.id == trailair::input::ButtonId::Left) {
+    if (e.action == trailair::input::ButtonAction::Pressed) leftPressed_ = true;
+    else if (e.action == trailair::input::ButtonAction::Released) leftPressed_ = false;
 
-    if (e.action == ta::input::Action::LongHold) {
+    if (e.action == trailair::input::ButtonAction::LongHold) {
       sleepRequested_ = true;
       leftLongHoldActive_ = true;
       leftPressed_ = false;
@@ -172,12 +171,12 @@ void StateController::onButton(const ta::input::Event& e) {
       return;
     }
     if (leftLongHoldActive_) return; // swallow all following left events until wake
-    if (e.action == ta::input::Action::Click && leftPressed_) return; // ignore repeat clicks while held
-    if ((e.action == ta::input::Action::Click || e.action == ta::input::Action::Released) && now < suppressLeftClicksUntil_) return;
+    if (e.action == trailair::input::ButtonAction::Click && leftPressed_) return; // ignore repeat clicks while held
+    if ((e.action == trailair::input::ButtonAction::Click || e.action == trailair::input::ButtonAction::Released) && now < suppressLeftClicksUntil_) return;
   }
 
   // Disconnected & Pairing shortcuts remain remote-specific
-  if (rState_ == RemoteState::DISCONNECTED && e.id == ta::input::ButtonId::Right && e.action == ta::input::Action::Click) {
+  if (rState_ == RemoteState::DISCONNECTED && e.id == trailair::input::ButtonId::Right && e.action == trailair::input::ButtonAction::Click) {
     // Always try pairing - if board is already paired to us, it will just re-ack
     // If board changed (new MAC), this allows automatic re-pairing
     // If board is paired to different remote, it will send Busy
@@ -185,7 +184,7 @@ void StateController::onButton(const ta::input::Event& e) {
     return;
   }
   if (rState_ == RemoteState::PAIRING) {
-    if (e.id == ta::input::ButtonId::Right && e.action == ta::input::Action::Click) {
+    if (e.id == trailair::input::ButtonId::Right && e.action == trailair::input::ButtonAction::Click) {
       if (link_.isPairing()) link_.cancelPairing();
       else if (pairingFailed_) link_.startPairing(cfg_.link->pairingGroupIdentifier, cfg_.link->pairingTimeoutMilliseconds);
     }
@@ -194,37 +193,37 @@ void StateController::onButton(const ta::input::Event& e) {
 
   // Delegate to shared UI machine
   RemoteActions ra; ra.self = this;
-  ta::ui::ButtonEvent be{
-    e.id == ta::input::ButtonId::Left ? ta::ui::Button::Left :
-    e.id == ta::input::ButtonId::Down ? ta::ui::Button::Down :
-    e.id == ta::input::ButtonId::Up   ? ta::ui::Button::Up   : ta::ui::Button::Right,
-    e.action == ta::input::Action::Pressed ? ta::ui::Action::Pressed :
-    e.action == ta::input::Action::Released? ta::ui::Action::Released:
-    e.action == ta::input::Action::Click   ? ta::ui::Action::Click   : ta::ui::Action::LongHold
+  trailair::ui::ButtonEvent be{
+    e.id == trailair::input::ButtonId::Left ? trailair::ui::ButtonId::Left :
+    e.id == trailair::input::ButtonId::Down ? trailair::ui::ButtonId::Down :
+    e.id == trailair::input::ButtonId::Up   ? trailair::ui::ButtonId::Up   : trailair::ui::ButtonId::Right,
+    e.action == trailair::input::ButtonAction::Pressed ? trailair::ui::ButtonAction::Pressed :
+    e.action == trailair::input::ButtonAction::Released? trailair::ui::ButtonAction::Released:
+    e.action == trailair::input::ButtonAction::Click   ? trailair::ui::ButtonAction::Click   : trailair::ui::ButtonAction::LongHold
   };
   ui_.onButton(be, ra);
 
   // rState_ will be synced in update(); no need to mutate here.
 }
 
-void StateController::handleButtonsDisconnected_(const ta::input::Event& e, uint32_t /*now*/) {
+void StateController::handleButtonsDisconnected_(const trailair::input::ButtonEvent& e, uint32_t /*now*/) {
   (void)e;
 }
 
-void StateController::buildDisplayModel(ta::display::DisplayModel& dm) const {
-  dm.batteryPercent = batteryPercent_;
-  dm.link = isConnected_ ? ta::display::Link::Connected : ta::display::Link::Disconnected;
+void StateController::buildDisplayModel(trailair::display::DisplayModel& dm) const {
+  dm.batteryPercentage = batteryPercent_;
+  dm.connectionStatus = isConnected_ ? trailair::display::ConnectionStatus::Connected : trailair::display::ConnectionStatus::Disconnected;
 
   switch (cState_) {
-    case ControlState::IDLE:     dm.ctrl = ta::display::Ctrl::Idle;     break;
-    case ControlState::AIRUP:    dm.ctrl = ta::display::Ctrl::AirUp;    break;
-    case ControlState::VENTING:  dm.ctrl = ta::display::Ctrl::Venting;  break;
-    case ControlState::CHECKING: dm.ctrl = ta::display::Ctrl::Checking; break;
-    case ControlState::ERROR:    dm.ctrl = ta::display::Ctrl::Error;    break;
+    case ControlState::IDLE:     dm.controllerActivity = trailair::display::ControllerActivity::Idle;     break;
+    case ControlState::AIRUP:    dm.controllerActivity = trailair::display::ControllerActivity::AirUp;    break;
+    case ControlState::VENTING:  dm.controllerActivity = trailair::display::ControllerActivity::Venting;  break;
+    case ControlState::CHECKING: dm.controllerActivity = trailair::display::ControllerActivity::Checking; break;
+    case ControlState::ERROR:    dm.controllerActivity = trailair::display::ControllerActivity::Error;    break;
   }
 
-  dm.currentPSI = currentPsi_;
-  dm.targetPSI  = ui_.targetPsi();
+  dm.currentPressurePSI = currentPsi_;
+  dm.targetPressurePSI  = ui_.getTargetPSI();
   dm.lastErrorCode = lastErrorCode_;
   dm.seekingShowDoneHold = ui_.isDoneHoldActive(millis());
   dm.showReconnectHint = (!isConnecting_);
@@ -234,40 +233,40 @@ void StateController::buildDisplayModel(ta::display::DisplayModel& dm) const {
   dm.pairingFailed = (rState_ == RemoteState::PAIRING) && pairingFailed_;
   dm.pairingBusy   = (rState_ == RemoteState::PAIRING) && pairingBusy_;
 
-  switch (ui_.view()) {
-    case ta::ui::View::Disconnected: dm.view = ta::display::View::Disconnected; break;
-    case ta::ui::View::Idle:         dm.view = ta::display::View::Idle;         break;
-    case ta::ui::View::Manual:       dm.view = ta::display::View::Manual;       break;
-    case ta::ui::View::Seeking:      dm.view = ta::display::View::Seeking;      break;
-    case ta::ui::View::Error:        dm.view = ta::display::View::Error;        break;
-    case ta::ui::View::Pairing:      dm.view = ta::display::View::Pairing;      break;
+  switch (ui_.getViewState()) {
+    case trailair::ui::ViewState::Disconnected: dm.viewType = trailair::display::ViewType::Disconnected; break;
+    case trailair::ui::ViewState::Idle:         dm.viewType = trailair::display::ViewType::Idle;         break;
+    case trailair::ui::ViewState::Manual:       dm.viewType = trailair::display::ViewType::Manual;       break;
+    case trailair::ui::ViewState::Seeking:      dm.viewType = trailair::display::ViewType::Seeking;      break;
+    case trailair::ui::ViewState::Error:        dm.viewType = trailair::display::ViewType::Error;        break;
+    case trailair::ui::ViewState::Pairing:      dm.viewType = trailair::display::ViewType::Pairing;      break;
   }
 }
 
-void StateController::onPairEvent(ta::comms::PairEvent ev, const uint8_t* /*mac*/) {
+void StateController::onPairEvent(trailair::comms::PairEvent ev, const uint8_t* /*mac*/) {
   switch (ev) {
-    case ta::comms::PairEvent::Started:
+    case trailair::comms::PairEvent::Started:
       pairingFailed_ = false;
       pairingBusy_ = false;
       pairingFailHoldUntil_ = 0;
       rState_ = RemoteState::PAIRING;
       break;
-    case ta::comms::PairEvent::Acked:
+    case trailair::comms::PairEvent::Acked:
       rState_ = RemoteState::DISCONNECTED;
       break;
-    case ta::comms::PairEvent::Busy:
+    case trailair::comms::PairEvent::Busy:
       pairingBusy_ = true;
       pairingFailed_ = true;
       pairingFailHoldUntil_ = millis() + 2000;
       break;
-    case ta::comms::PairEvent::Timeout:
-    case ta::comms::PairEvent::Canceled:
+    case trailair::comms::PairEvent::Timeout:
+    case trailair::comms::PairEvent::Canceled:
       pairingBusy_ = false;
       pairingFailed_ = true;
       pairingFailHoldUntil_ = millis() + 2000;
       break;
-    case ta::comms::PairEvent::Saved:
-    case ta::comms::PairEvent::Cleared:
+    case trailair::comms::PairEvent::Saved:
+    case trailair::comms::PairEvent::Cleared:
     default:
       break;
   }

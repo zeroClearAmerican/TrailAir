@@ -112,10 +112,10 @@ TEST_F(CommsTest, ISRSafety_ConcurrentReadWrite_NoRaceCondition) {
     
     // Create a status packet
     uint8_t packet[2];
-    ta::protocol::Response resp;
-    resp.kind = ta::protocol::Response::Kind::Idle;
-    resp.currentPsi = 30.0f;
-    ta::protocol::packResponse(packet, resp);
+    trailair::protocol::Response resp;
+    resp.status = trailair::protocol::StatusCode::Idle;
+    resp.currentPressurePSI = 30.0f;
+    trailair::protocol::packResponse(packet, resp);
     
     std::atomic<bool> testRunning{true};
     std::atomic<int> readCount{0};
@@ -161,10 +161,10 @@ TEST_F(CommsTest, ISRSafety_LastSeenMs_AtomicRead) {
     
     // Create a status packet
     uint8_t packet[2];
-    ta::protocol::Response resp;
-    resp.kind = ta::protocol::Response::Kind::Idle;
-    resp.currentPsi = 30.0f;
-    ta::protocol::packResponse(packet, resp);
+    trailair::protocol::Response resp;
+    resp.status = trailair::protocol::StatusCode::Idle;
+    resp.currentPressurePSI = 30.0f;
+    trailair::protocol::packResponse(packet, resp);
     
     // Initially should be 0
     EXPECT_EQ(0u, link->lastSeenMs());
@@ -182,10 +182,10 @@ TEST_F(CommsTest, ISRSafety_Service_AtomicReadDuringTimeout) {
     
     // Create a status packet
     uint8_t packet[2];
-    ta::protocol::Response resp;
-    resp.kind = ta::protocol::Response::Kind::Idle;
-    resp.currentPsi = 30.0f;
-    ta::protocol::packResponse(packet, resp);
+    trailair::protocol::Response resp;
+    resp.status = trailair::protocol::StatusCode::Idle;
+    resp.currentPressurePSI = 30.0f;
+    trailair::protocol::packResponse(packet, resp);
     
     // Simulate receiving a packet to establish connection
     simulateRecvFromISR(testPeer, packet, 2);
@@ -236,10 +236,10 @@ TEST_F(CommsTest, Connection_BecomeConnectedOnValidPacket) {
     ASSERT_TRUE(link->begin(testPeer));
     
     uint8_t packet[2];
-    ta::protocol::Response resp;
-    resp.kind = ta::protocol::Response::Kind::Idle;
-    resp.currentPsi = 30.0f;
-    ta::protocol::packResponse(packet, resp);
+    trailair::protocol::Response resp;
+    resp.status = trailair::protocol::StatusCode::Idle;
+    resp.currentPressurePSI = 30.0f;
+    trailair::protocol::packResponse(packet, resp);
     
     simulateRecvFromISR(testPeer, packet, 2);
     
@@ -260,18 +260,18 @@ TEST_F(CommsTest, Connection_StatusCallbackInvoked) {
     ASSERT_TRUE(link->begin(testPeer));
     
     bool callbackInvoked = false;
-    ta::protocol::Response receivedResp;
+    trailair::protocol::Response receivedResp;
     
-    link->setStatusCallback([](void* ctx, const ta::protocol::Response& msg) {
+    link->setStatusCallback([](void* ctx, const trailair::protocol::Response& msg) {
         bool* invoked = static_cast<bool*>(ctx);
         *invoked = true;
     }, &callbackInvoked);
     
     uint8_t packet[2];
-    ta::protocol::Response resp;
-    resp.kind = ta::protocol::Response::Kind::Seeking;
-    resp.currentPsi = 45.5f;
-    ta::protocol::packResponse(packet, resp);
+    trailair::protocol::Response resp;
+    resp.status = trailair::protocol::StatusCode::AirUp;
+    resp.currentPressurePSI = 45.5f;
+    trailair::protocol::packResponse(packet, resp);
     
     simulateRecvFromISR(testPeer, packet, 2);
     
@@ -331,7 +331,7 @@ TEST_F(CommsTest, Protocol_IgnoresInvalidPackets) {
     ASSERT_TRUE(link->begin(testPeer));
     
     bool callbackInvoked = false;
-    link->setStatusCallback([](void* ctx, const ta::protocol::Response& msg) {
+    link->setStatusCallback([](void* ctx, const trailair::protocol::Response& msg) {
         bool* invoked = static_cast<bool*>(ctx);
         *invoked = true;
     }, &callbackInvoked);
@@ -348,16 +348,16 @@ TEST_F(CommsTest, Protocol_AcceptsValidStatusPacket) {
     ASSERT_TRUE(link->begin(testPeer));
     
     bool callbackInvoked = false;
-    link->setStatusCallback([](void* ctx, const ta::protocol::Response& msg) {
+    link->setStatusCallback([](void* ctx, const trailair::protocol::Response& msg) {
         bool* invoked = static_cast<bool*>(ctx);
         *invoked = true;
     }, &callbackInvoked);
     
     uint8_t packet[2];
-    ta::protocol::Response resp;
-    resp.kind = ta::protocol::Response::Kind::Idle;
-    resp.currentPsi = 30.0f;
-    ta::protocol::packResponse(packet, resp);
+    trailair::protocol::Response resp;
+    resp.status = trailair::protocol::StatusCode::Idle;
+    resp.currentPressurePSI = 30.0f;
+    trailair::protocol::packResponse(packet, resp);
     
     simulateRecvFromISR(testPeer, packet, 2);
     

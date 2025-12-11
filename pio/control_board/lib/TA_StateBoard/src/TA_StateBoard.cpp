@@ -1,6 +1,6 @@
 #include "TA_StateBoard.h"
 
-using namespace ta::stateboard;
+using namespace trailair::stateboard;
 
 void StateBoard::begin() {
   Config def; begin(def);
@@ -8,110 +8,129 @@ void StateBoard::begin() {
 
 void StateBoard::begin(const Config& cfg) {
   cfg_ = cfg;
-  ta::ui::UiConfig uicfg;
-  uicfg.minPsi = cfg_.ui.minPsi;
-  uicfg.maxPsi = cfg_.ui.maxPsi;
-  uicfg.defaultTargetPsi = cfg_.ui.defaultTargetPsi;
-  uicfg.stepSmall = cfg_.ui.stepSmall;
-  uicfg.doneHoldMs = cfg_.ui.doneHoldMs;
-  uicfg.errorAutoClearMs = cfg_.ui.errorAutoClearMs;
+  trailair::ui::UserInterfaceConfig uicfg;
+  uicfg.minimumPSI = cfg_.ui.minimumPressurePSI;
+  uicfg.maximumPSI = cfg_.ui.maximumPressurePSI;
+  uicfg.defaultTargetPSI = cfg_.ui.defaultTargetPressurePSI;
+  uicfg.stepSize = cfg_.ui.pressureStepSmallPSI;
+  uicfg.doneHoldDurationMilliseconds = cfg_.ui.doneHoldDurationMilliseconds;
+  uicfg.errorAutoClearDurationMilliseconds = cfg_.ui.errorAutoClearDurationMilliseconds;
   ui_.begin(uicfg);
 }
 
-static ta::ui::Ctrl mapCtrl(ta::ctl::State s) {
+static trailair::ui::ControllerState mapCtrl(trailair::controller::ControllerState s) {
   switch (s) {
-    case ta::ctl::State::IDLE: return ta::ui::Ctrl::Idle;
-    case ta::ctl::State::AIRUP: return ta::ui::Ctrl::AirUp;
-    case ta::ctl::State::VENTING: return ta::ui::Ctrl::Venting;
-    case ta::ctl::State::CHECKING: return ta::ui::Ctrl::Checking;
-    case ta::ctl::State::ERROR: return ta::ui::Ctrl::Error;
+    case trailair::controller::ControllerState::Idle: return trailair::ui::ControllerState::Idle;
+    case trailair::controller::ControllerState::AirUp: return trailair::ui::ControllerState::AirUp;
+    case trailair::controller::ControllerState::Venting: return trailair::ui::ControllerState::Venting;
+    case trailair::controller::ControllerState::Checking: return trailair::ui::ControllerState::Checking;
+    case trailair::controller::ControllerState::Error: return trailair::ui::ControllerState::Error;
   }
-  return ta::ui::Ctrl::Idle;
+  return trailair::ui::ControllerState::Idle;
 }
 
-ta::ui::Ctrl StateBoard::toUiCtrl_(ta::ctl::State s) { return mapCtrl(s); }
+trailair::ui::ControllerState StateBoard::toUiCtrl_(trailair::controller::ControllerState s) { return mapCtrl(s); }
 
-static ta::ui::Button toBtn(ta::input::ButtonId id) {
+static trailair::ui::ButtonId toBtn(trailair::input::ButtonId id) {
   switch (id) {
-    case ta::input::ButtonId::Left: return ta::ui::Button::Left;
-    case ta::input::ButtonId::Down: return ta::ui::Button::Down;
-    case ta::input::ButtonId::Up:   return ta::ui::Button::Up;
-    case ta::input::ButtonId::Right:return ta::ui::Button::Right;
+    case trailair::input::ButtonId::Left: return trailair::ui::ButtonId::Left;
+    case trailair::input::ButtonId::Down: return trailair::ui::ButtonId::Down;
+    case trailair::input::ButtonId::Up:   return trailair::ui::ButtonId::Up;
+    case trailair::input::ButtonId::Right:return trailair::ui::ButtonId::Right;
   }
-  return ta::ui::Button::Left;
+  return trailair::ui::ButtonId::Left;
 }
 
-static ta::ui::Action toAct(ta::input::Action a) {
+static trailair::ui::ButtonAction toAct(trailair::input::ButtonAction a) {
   switch (a) {
-    case ta::input::Action::Pressed: return ta::ui::Action::Pressed;
-    case ta::input::Action::Released:return ta::ui::Action::Released;
-    case ta::input::Action::Click:   return ta::ui::Action::Click;
-    case ta::input::Action::LongHold:return ta::ui::Action::LongHold;
+    case trailair::input::ButtonAction::Pressed: return trailair::ui::ButtonAction::Pressed;
+    case trailair::input::ButtonAction::Released:return trailair::ui::ButtonAction::Released;
+    case trailair::input::ButtonAction::Click:   return trailair::ui::ButtonAction::Click;
+    case trailair::input::ButtonAction::LongHold:return trailair::ui::ButtonAction::LongHold;
   }
-  return ta::ui::Action::Click;
+  return trailair::ui::ButtonAction::Click;
 }
 
-ta::ui::ButtonEvent StateBoard::toUiBtn_(const ta::input::Event& ev) {
-  return ta::ui::ButtonEvent{ toBtn(ev.id), toAct(ev.action) };
+trailair::ui::ButtonEvent StateBoard::toUiBtn_(const trailair::input::ButtonEvent& ev) {
+  return trailair::ui::ButtonEvent{ toBtn(ev.id), toAct(ev.action) };
 }
 
-void StateBoard::onButton(const ta::input::Event& ev, ta::ctl::Controller& controller) {
+void StateBoard::onButton(const trailair::input::ButtonEvent& ev, trailair::controller::PressureController& controller) {
   BoardActions act; act.ctl = &controller;
   ui_.onButton(toUiBtn_(ev), act);
 }
 
 void StateBoard::update(uint32_t now,
-                        ta::ctl::Controller& controller,
-                        const ta::comms::BoardLink& link) {
+                        trailair::controller::PressureController& controller,
+                        const trailair::comms::BoardLink& link) {
   (void)link;
   BoardActions act; act.ctl = &controller;
-  ui_.update(now, act, toUiCtrl_(controller.state()));
+  ui_.update(now, act, toUiCtrl_(controller.getState()));
 }
 
-void StateBoard::buildDisplayModel(ta::display::DisplayModel& m,
-                                   const ta::ctl::Controller& controller,
-                                   const ta::comms::BoardLink& link,
+void StateBoard::buildDisplayModel(trailair::display::DisplayModel& m,
+                                   const trailair::controller::PressureController& controller,
+                                   const trailair::comms::BoardLink& link,
                                    uint32_t now) const {
   // PSI
-  m.currentPSI = controller.currentPsi();
-  m.targetPSI  = ui_.targetPsi();
+  m.currentPressurePSI = controller.getCurrentPSI();
+  m.targetPressurePSI  = ui_.getTargetPSI();
 
   // Link icon
-  m.link = (link.isPaired() && link.isRemoteActive(cfg_.link.remoteActiveTimeoutMilliseconds))
-          ? ta::display::Link::Connected
-          : ta::display::Link::Disconnected;
+  m.connectionStatus = (link.isPaired() && link.isRemoteActive(cfg_.link.remoteActiveTimeoutMilliseconds))
+          ? trailair::display::ConnectionStatus::Connected
+          : trailair::display::ConnectionStatus::Disconnected;
 
   // Ctrl
-  switch (controller.state()) {
-    case ta::ctl::State::IDLE:     m.ctrl = ta::display::Ctrl::Idle; break;
-    case ta::ctl::State::AIRUP:    m.ctrl = ta::display::Ctrl::AirUp; break;
-    case ta::ctl::State::VENTING:  m.ctrl = ta::display::Ctrl::Venting; break;
-    case ta::ctl::State::CHECKING: m.ctrl = ta::display::Ctrl::Checking; break;
-    case ta::ctl::State::ERROR:    m.ctrl = ta::display::Ctrl::Error; break;
+  switch (controller.getState()) {
+    case trailair::controller::ControllerState::Idle:     m.controllerActivity = trailair::display::ControllerActivity::Idle; break;
+    case trailair::controller::ControllerState::AirUp:    m.controllerActivity = trailair::display::ControllerActivity::AirUp; break;
+    case trailair::controller::ControllerState::Venting:  m.controllerActivity = trailair::display::ControllerActivity::Venting; break;
+    case trailair::controller::ControllerState::Checking: m.controllerActivity = trailair::display::ControllerActivity::Checking; break;
+    case trailair::controller::ControllerState::Error:    m.controllerActivity = trailair::display::ControllerActivity::Error; break;
   }
 
-  // View mapping
-  switch (ui_.view()) {
-    case ta::ui::View::Idle:         m.view = ta::display::View::Idle; break;
-    case ta::ui::View::Manual:       m.view = ta::display::View::Manual; break;
-    case ta::ui::View::Seeking:      m.view = ta::display::View::Seeking; break;
-    case ta::ui::View::Error:        m.view = ta::display::View::Error; break;
-    case ta::ui::View::Disconnected: m.view = ta::display::View::Idle; break; // board never disconnected view
-    case ta::ui::View::Pairing:      m.view = ta::display::View::Idle; break;
+  // View mapping: Override UI state machine view with controller-derived view
+  // This ensures the display matches what's actually happening even when controlled remotely
+  trailair::ui::ViewState uiView = ui_.getViewState();
+  
+  // If controller is in error, always show error view
+  if (controller.getState() == trailair::controller::ControllerState::Error) {
+    m.viewType = trailair::display::ViewType::Error;
+  }
+  // If controller is actively seeking but UI doesn't know it (remote command), show seeking
+  else if ((controller.getState() == trailair::controller::ControllerState::AirUp ||
+            controller.getState() == trailair::controller::ControllerState::Venting ||
+            controller.getState() == trailair::controller::ControllerState::Checking) &&
+           uiView == trailair::ui::ViewState::Idle) {
+    // Controller is active but UI thinks we're idle - must be remote-initiated seeking
+    m.viewType = trailair::display::ViewType::Seeking;
+  }
+  // Normal UI state mapping
+  else {
+    switch (uiView) {
+      case trailair::ui::ViewState::Idle:         m.viewType = trailair::display::ViewType::Idle; break;
+      case trailair::ui::ViewState::Manual:       m.viewType = trailair::display::ViewType::Manual; break;
+      case trailair::ui::ViewState::Seeking:      m.viewType = trailair::display::ViewType::Seeking; break;
+      case trailair::ui::ViewState::Error:        m.viewType = trailair::display::ViewType::Error; break;
+      case trailair::ui::ViewState::Disconnected: m.viewType = trailair::display::ViewType::Idle; break; // board never disconnected view
+      case trailair::ui::ViewState::Pairing:      m.viewType = trailair::display::ViewType::Idle; break;
+    }
   }
 
   // Done hold
   m.seekingShowDoneHold = ui_.isDoneHoldActive(now);
 
   // Error code
-  if (controller.state() == ta::ctl::State::ERROR) {
-    m.lastErrorCode = controller.errorByte();
+  if (controller.getState() == trailair::controller::ControllerState::Error) {
+    m.lastErrorCode = controller.getErrorByte();
   } else {
     m.lastErrorCode = 0;
   }
 
   // Unused
-  m.batteryPercent = 0;
+  m.batteryPercentage = 0;
+  m.showBatteryIcon = false;  // Control board is externally powered, no battery
   m.showReconnectHint = false;
   m.pairingActive = false;
   m.pairingFailed = false;

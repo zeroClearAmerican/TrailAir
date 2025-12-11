@@ -4,14 +4,14 @@
 // Pull in adc_attenuation_t for analogSetPinAttenuation cast
 #include "driver/adc.h"
 
-namespace ta {
+namespace trailair {
     namespace battery {
 
-        TA_BatteryMonitor::TA_BatteryMonitor(const Config& cfg) : cfg_(cfg) {
+        BatteryMonitor::BatteryMonitor(const Config& cfg) : cfg_(cfg) {
             clampConfig_();
         }
 
-        bool TA_BatteryMonitor::begin(uint8_t pin, int attenEnum) {
+        bool BatteryMonitor::begin(uint8_t pin, int attenEnum) {
             pin_ = pin;
             attenEnum_ = attenEnum;
             reset();
@@ -21,7 +21,7 @@ namespace ta {
             return true;
         }
 
-        void TA_BatteryMonitor::reset() {
+        void BatteryMonitor::reset() {
             memset(buf_, 0, sizeof(buf_));
             idx_ = 0;
             count_ = 0;
@@ -31,7 +31,7 @@ namespace ta {
             hasFix_ = false;
         }
 
-        bool TA_BatteryMonitor::update() {
+        bool BatteryMonitor::update() {
             // Read mV at pin (ADC), then convert to battery-side mV using divider ratio
             uint32_t mvPin = analogReadMilliVolts(pin_);
             int mvBatt = (int)lroundf((float)mvPin * cfg_.dividerRatio);
@@ -55,7 +55,7 @@ namespace ta {
             return changed;
         }
 
-        void TA_BatteryMonitor::pushSample_(int mvBatt) {
+        void BatteryMonitor::pushSample_(int mvBatt) {
             if (count_ < cfg_.sampleCount) {
                 buf_[idx_] = mvBatt;
                 sum_ += mvBatt;
@@ -69,12 +69,12 @@ namespace ta {
             }
         }
 
-        int TA_BatteryMonitor::avgMv_() const {
+        int BatteryMonitor::avgMv_() const {
             if (count_ == 0) return 0;
             return (int)(sum_ / (long)count_);
         }
 
-        void TA_BatteryMonitor::recomputePercent_() {
+        void BatteryMonitor::recomputePercent_() {
             float v = voltage();
             float denom = (cfg_.vFull - cfg_.vEmpty);
             if (denom <= 0.01f) denom = 0.01f;
@@ -86,7 +86,7 @@ namespace ta {
             percent_ = (int)lroundf(pct);
         }
 
-        void TA_BatteryMonitor::clampConfig_() {
+        void BatteryMonitor::clampConfig_() {
             if (cfg_.sampleCount == 0) cfg_.sampleCount = 1;
             if (cfg_.sampleCount > MAX_SAMPLES) cfg_.sampleCount = MAX_SAMPLES;
             if (cfg_.dividerRatio < 1.0f) cfg_.dividerRatio = 1.0f;

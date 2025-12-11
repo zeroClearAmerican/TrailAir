@@ -8,7 +8,7 @@
 #include <TA_Battery.h>
 #include <Adafruit_SSD1306.h>
 
-namespace ta { namespace app {
+namespace trailair { namespace app {
 
 class RemoteApp {
 public:
@@ -16,22 +16,22 @@ public:
 
   explicit RemoteApp(const Pins& pins, Adafruit_SSD1306* disp = nullptr)
     : pins_(pins), buttons_({ pins.btnLeft, pins.btnDown, pins.btnUp, pins.btnRight }),
-      disp_(disp), ui_(disp ? new ta::display::TA_Display(*disp) : nullptr), state_(link_) {}
+      disp_(disp), ui_(disp ? new trailair::display::DisplayController(*disp) : nullptr), state_(link_) {}
   ~RemoteApp() { delete ui_; }
 
   void begin();
   void loop();
 
   // Accessors
-  ta::comms::EspNowLink& link() { return link_; }
-  ta::state::StateController& state() { return state_; }
+  trailair::comms::EspNowLink& link() { return link_; }
+  trailair::state::StateController& state() { return state_; }
 
 private:
   // Callbacks
-  static void onStatusStatic_(void* ctx, const ta::protocol::Response& msg);
-  static void onPairEventStatic_(void* ctx, ta::comms::PairEvent ev, const uint8_t mac[6]);
-  void onStatus_(const ta::protocol::Response& msg);
-  void onPairEvent_(ta::comms::PairEvent ev, const uint8_t mac[6]);
+  static void onStatusStatic_(void* ctx, const trailair::protocol::Response& msg);
+  static void onPairEventStatic_(void* ctx, trailair::comms::PairEvent ev, const uint8_t mac[6]);
+  void onStatus_(const trailair::protocol::Response& msg);
+  void onPairEvent_(trailair::comms::PairEvent ev, const uint8_t mac[6]);
 
   void setupWakeup_();
   void goToSleep_();
@@ -41,14 +41,14 @@ private:
   Pins pins_{};
 
   // Subsystems
-  ta::comms::EspNowLink link_{};
-  ta::state::StateController state_;
-  ta::input::Buttons buttons_;
-  ta::battery::TA_BatteryMonitor batteryMon_{};
+  trailair::comms::EspNowLink link_{};
+  trailair::state::StateController state_;
+  trailair::input::ButtonManager buttons_;
+  trailair::battery::BatteryMonitor batteryMon_{};
 
   // Display (optional)
   Adafruit_SSD1306* disp_ = nullptr;
-  ta::display::TA_Display* ui_ = nullptr;
+  trailair::display::DisplayController* ui_ = nullptr;
 
   // Sleep/inactivity
   static constexpr unsigned long SLEEP_TIMEOUT_MS_ = 300000; // 5 minutes

@@ -1,5 +1,5 @@
 /**
- * Unit tests for TA_Display Animation State Machine
+ * Unit tests for DisplayController Animation State Machine
  * Tests non-blocking logoWipe animation logic without hardware rendering
  */
 
@@ -11,7 +11,7 @@
 #include <TA_Time_test.cpp>     // MockTime implementation
 #include "TA_Display_anim_impl.cpp"
 
-using namespace ta::display;
+using namespace trailair::display;
 
 // ============================================================================
 // Mock Display Hardware - Tracks calls instead of rendering
@@ -75,7 +75,7 @@ class DisplayTest : public ::testing::Test {
 protected:
     MockDisplay mockDisplay;
     TA_DisplayAnim* display = nullptr;
-    ta::time::test::MockTime mockTime;
+    trailair::time::test::MockTime mockTime;
     
     // Test logo data (8x8 pixels)
     static const uint8_t testLogo[];

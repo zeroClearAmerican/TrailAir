@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <vector>
 
-namespace ta {
+namespace trailair {
 namespace sensors {
 
 class PressureFilter {

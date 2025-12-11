@@ -10,8 +10,7 @@
 #define TA_COMMS_DEBUG 1
 #endif
 
-namespace ta {
-    namespace comms {
+namespace trailair { namespace comms {
 
         enum class PairEvent {
             Started,
@@ -23,8 +22,8 @@ namespace ta {
             Cleared
         };
 
-        using ta::protocol::Response;
-        using ta::protocol::Request;
+        using trailair::protocol::Response;
+        using trailair::protocol::Request;
 
         typedef void (*StatusCallback)(void* ctx, const Response& msg);
         typedef void (*PairCallback)(void* ctx, PairEvent ev, const uint8_t mac[6]);
@@ -85,11 +84,11 @@ namespace ta {
                 void onSent(const uint8_t* mac, esp_now_send_status_t status);
 
                 bool ensurePeer_();
-                bool sendRaw_(const uint8_t payload[ta::protocol::kPayloadLen]);
+                bool sendRaw_(const uint8_t payload[trailair::protocol::PAYLOAD_LENGTH]);
 
                 void emitPairEvent_(PairEvent ev, const uint8_t mac[6]);
 
-                void handlePairFrame_(const uint8_t* mac, const ta::protocol::PairMsg& pm);
+                void handlePairFrame_(const uint8_t* mac, const trailair::protocol::PairingMessage& pm);
                 void stopPairing_(PairEvent finalEv, const uint8_t* mac);
 
                 bool sendPairReq_();

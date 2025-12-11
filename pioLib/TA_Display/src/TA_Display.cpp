@@ -1,366 +1,446 @@
+/**
+ * @file TA_Display.cpp
+ * @brief Implementation of DisplayController for TrailAir OLED screen
+ */
 #include "TA_Display.h"
 #include "TA_DisplayIcons.h"
 #include <TA_Time.h>
 
-namespace ta {
+namespace trailair {
     namespace display {
 
-        bool TA_Display::begin(uint8_t i2cAddr, bool showBootLogo) {
+        bool DisplayController::begin(uint8_t i2cAddress, bool showBootLogo) {
             // Note: caller should have constructed Adafruit_SSD1306 with width/height/Wire/reset already
-            if (!d_.begin(SSD1306_SWITCHCAPVCC, i2cAddr)) {
+            if (!_display.begin(SSD1306_SWITCHCAPVCC, i2cAddress)) {
                 return false;
             }
-            d_.clearDisplay();
+            _display.clearDisplay();
             if (showBootLogo && Icons::logo_bmp && Icons::LogoW && Icons::LogoH) {
                 // Use blocking version during begin() - happens once at startup
                 logoWipe(Icons::logo_bmp, Icons::LogoW, Icons::LogoH, true, 5);
+                // Clear display after logo animation completes
+                _display.clearDisplay();
+                _display.display();
             } else {
-                d_.display();
+                _display.display();
             }
             return true;
         }
 
-        void TA_Display::drawLogo(const uint8_t* logo, uint8_t w, uint8_t h) {
-            d_.clearDisplay();
-            int x = (d_.width()  - w) / 2;
-            int y = (d_.height() - h) / 2;
-            d_.drawBitmap(x, y, logo, w, h, SSD1306_WHITE);
-            d_.display();
+        void DisplayController::drawLogo(const uint8_t* logoBitmap, uint8_t width, uint8_t height) {
+            _display.clearDisplay();
+            int x = (_display.width()  - width) / 2;
+            int y = (_display.height() - height) / 2;
+            _display.drawBitmap(x, y, logoBitmap, width, height, SSD1306_WHITE);
+            _display.display();
         }
 
-        void TA_Display::logoWipe(const uint8_t* logo, uint8_t w, uint8_t h, bool wipeIn, uint16_t stepDelayMs) {
-            int x = (d_.width()  - w) / 2;
-            int y = (d_.height() - h) / 2;
+        void DisplayController::logoWipe(const uint8_t* logoBitmap, uint8_t width, uint8_t height, bool wipeIn, uint16_t stepDelayMilliseconds) {
+            int x = (_display.width()  - width) / 2;
+            int y = (_display.height() - height) / 2;
 
-            d_.clearDisplay();
-            for (int col = 0; col <= w; ++col) {
-                d_.drawBitmap(x, y, logo, w, h, SSD1306_WHITE);
+            _display.clearDisplay();
+            for (int col = 0; col <= width; ++col) {
+                _display.drawBitmap(x, y, logoBitmap, width, height, SSD1306_WHITE);
                 if (wipeIn) {
-                    // Mask the right side, revealing only the left w pixels
-                    d_.fillRect(x + col, y, w - col, h, SSD1306_BLACK);
+                    // Mask the right side, revealing only the left pixels
+                    _display.fillRect(x + col, y, width - col, height, SSD1306_BLACK);
                 } else {
-                    // Mask the left side, hiding the left w pixels
-                    d_.fillRect(x, y, col, h, SSD1306_BLACK);
+                    // Mask the left side, hiding the left pixels
+                    _display.fillRect(x, y, col, height, SSD1306_BLACK);
                 }
-                d_.display();
-                delay(stepDelayMs);
+                _display.display();
+                delay(stepDelayMilliseconds);
             }
         }
 
         // Non-blocking animation API
-        void TA_Display::startLogoWipe(const uint8_t* logo, uint8_t w, uint8_t h, bool wipeIn, uint16_t stepDelayMs) {
-            wipeState_.active = true;
-            wipeState_.logo = logo;
-            wipeState_.w = w;
-            wipeState_.h = h;
-            wipeState_.wipeIn = wipeIn;
-            wipeState_.stepDelayMs = stepDelayMs;
-            wipeState_.currentCol = 0;
+        void DisplayController::startLogoWipe(const uint8_t* logoBitmap, uint8_t width, uint8_t height, bool wipeIn, uint16_t stepDelayMilliseconds) {
+            _wipeAnimationState.active = true;
+            _wipeAnimationState.logoBitmap = logoBitmap;
+            _wipeAnimationState.width = width;
+            _wipeAnimationState.height = height;
+            _wipeAnimationState.wipeIn = wipeIn;
+            _wipeAnimationState.stepDelayMilliseconds = stepDelayMilliseconds;
+            _wipeAnimationState.currentColumn = 0;
             // Set to past time to ensure first frame draws immediately
-            wipeState_.lastStepMs = ta::time::getMillis() - stepDelayMs;
+            _wipeAnimationState.lastStepMilliseconds = trailair::time::getMilliseconds() - stepDelayMilliseconds;
             
             // Draw initial frame immediately
             updateLogoWipe();
         }
 
-        void TA_Display::updateLogoWipe() {
-            if (!wipeState_.active) return;
+        void DisplayController::updateLogoWipe() {
+            if (!_wipeAnimationState.active) return;
             
-            uint32_t now = ta::time::getMillis();
+            uint32_t now = trailair::time::getMilliseconds();
             
             // Check if it's time for next frame
-            if (!ta::time::hasElapsed(now, wipeState_.lastStepMs, wipeState_.stepDelayMs)) {
+            if (!trailair::time::hasElapsed(now, _wipeAnimationState.lastStepMilliseconds, _wipeAnimationState.stepDelayMilliseconds)) {
                 return;  // Not time yet
             }
             
             // For zero delay, draw one frame per call
             // For non-zero delay, draw all ready frames (catch up if behind)
             bool continueDrawing = true;
-            while (wipeState_.active && continueDrawing) {
+            while (_wipeAnimationState.active && continueDrawing) {
                 // Calculate logo position
-                int x = (d_.width() - wipeState_.w) / 2;
-                int y = (d_.height() - wipeState_.h) / 2;
+                int x = (_display.width() - _wipeAnimationState.width) / 2;
+                int y = (_display.height() - _wipeAnimationState.height) / 2;
                 
                 // Draw current frame
-                d_.clearDisplay();
-                d_.drawBitmap(x, y, wipeState_.logo, wipeState_.w, wipeState_.h, SSD1306_WHITE);
+                _display.clearDisplay();
+                _display.drawBitmap(x, y, _wipeAnimationState.logoBitmap, _wipeAnimationState.width, _wipeAnimationState.height, SSD1306_WHITE);
                 
-                if (wipeState_.wipeIn) {
+                if (_wipeAnimationState.wipeIn) {
                     // Mask the right side, revealing only the left pixels
-                    d_.fillRect(x + wipeState_.currentCol, y, wipeState_.w - wipeState_.currentCol, wipeState_.h, SSD1306_BLACK);
+                    _display.fillRect(x + _wipeAnimationState.currentColumn, y, _wipeAnimationState.width - _wipeAnimationState.currentColumn, _wipeAnimationState.height, SSD1306_BLACK);
                 } else {
                     // Mask the left side, hiding the left pixels
-                    d_.fillRect(x, y, wipeState_.currentCol, wipeState_.h, SSD1306_BLACK);
+                    _display.fillRect(x, y, _wipeAnimationState.currentColumn, _wipeAnimationState.height, SSD1306_BLACK);
                 }
-                d_.display();
+                _display.display();
                 
                 // Advance to next step
-                wipeState_.currentCol++;
+                _wipeAnimationState.currentColumn++;
                 
                 // Update timing - different strategies for zero vs non-zero delay
-                if (wipeState_.stepDelayMs == 0) {
+                if (_wipeAnimationState.stepDelayMilliseconds == 0) {
                     // Zero delay: one frame per call, advance time to prevent immediate re-trigger
-                    wipeState_.lastStepMs = now;
+                    _wipeAnimationState.lastStepMilliseconds = now;
                     continueDrawing = false;  // Draw only one frame
                 } else {
                     // Non-zero delay: advance by step amount for precise timing
-                    wipeState_.lastStepMs += wipeState_.stepDelayMs;
+                    _wipeAnimationState.lastStepMilliseconds += _wipeAnimationState.stepDelayMilliseconds;
                     // Check if more frames are ready
-                    continueDrawing = ta::time::hasElapsed(now, wipeState_.lastStepMs, wipeState_.stepDelayMs);
+                    continueDrawing = trailair::time::hasElapsed(now, _wipeAnimationState.lastStepMilliseconds, _wipeAnimationState.stepDelayMilliseconds);
                 }
                 
                 // Check if animation is complete
-                if (wipeState_.currentCol > wipeState_.w) {
-                    wipeState_.active = false;
+                if (_wipeAnimationState.currentColumn > _wipeAnimationState.width) {
+                    _wipeAnimationState.active = false;
                 }
             }
         }
 
-        bool TA_Display::isLogoWipeActive() const {
-            return wipeState_.active;
+        bool DisplayController::isLogoWipeActive() const {
+            return _wipeAnimationState.active;
         }
 
-        void TA_Display::drawCriticalBattery() {
-            d_.clearDisplay();
-            d_.setTextSize(1);
-            d_.setTextColor(SSD1306_WHITE);
+        void DisplayController::drawCriticalBattery() {
+            _display.clearDisplay();
+            _display.setTextSize(1);
+            _display.setTextColor(SSD1306_WHITE);
             
-            String msg = "Charge Battery";
-            int16_t w, h;
-            measure_(msg, 1, w, h);
-            int x = centerX_(w);
-            int y = centerYBetween_(h, 0, d_.height());
+            String message = "Charge Battery";
+            int16_t width, height;
+            measureTextDimensions(message, 1, width, height);
+            int x = calculateCenterX(width);
+            int y = calculateCenterYBetween(height, 0, _display.height());
             
-            d_.setCursor(x, y);
-            d_.print(msg);
-            d_.display();
+            _display.setCursor(x, y);
+            _display.print(message);
+            _display.display();
         }
 
-        void TA_Display::render(const DisplayModel& m) {
-            d_.clearDisplay();
-            switch (m.view) {
-                case View::Disconnected: drawDisconnected(m); break;
-                case View::Idle:         drawIdle(m);         break;
-                case View::Manual:       drawManual(m);       break;
-                case View::Seeking:      drawSeeking(m);      break;
-                case View::Error:        drawError(m);        break;
-                case View::Pairing:      drawPairing(m);      break; // NEW
+        void DisplayController::render(const DisplayModel& model) {
+            _display.clearDisplay();
+            switch (model.viewType) {
+                case ViewType::Disconnected: renderDisconnectedView(model); break;
+                case ViewType::Idle:         renderIdleView(model);         break;
+                case ViewType::Manual:       renderManualView(model);       break;
+                case ViewType::Seeking:      renderSeekingView(model);      break;
+                case ViewType::Error:        renderErrorView(model);        break;
+                case ViewType::Pairing:      renderPairingView(model);      break;
             }
-            d_.display();
+            _display.display();
         }
 
-        void TA_Display::drawBatteryIcon_(int percent) {
-            int batteryX = 0;
-            int batteryY = 0;
-            int batteryW = 12;
-            int batteryH = 6;
-            int fillW = (int)((constrain(percent, 0, 98) / 100.0f) * (batteryW - 2));
+        void DisplayController::drawBatteryIcon(int percentage) {
+            const int BATTERY_X = 0;
+            const int BATTERY_Y = 0;
+            const int BATTERY_WIDTH = 12;
+            const int BATTERY_HEIGHT = 6;
+            const int BATTERY_TIP_OFFSET_Y = 2;
+            const int BATTERY_TIP_WIDTH = 1;
+            const int BATTERY_TIP_HEIGHT = 2;
+            const int LOW_BATTERY_THRESHOLD = 15;
+            
+            int fillWidth = (int)((constrain(percentage, 0, 98) / 100.0f) * (BATTERY_WIDTH - 2));
 
-            d_.drawRect(batteryX, batteryY, batteryW, batteryH, SSD1306_WHITE);
-            d_.drawRect(batteryX + batteryW, batteryY + 2, 1, 2, SSD1306_WHITE);
-            d_.fillRect(batteryX + 1, batteryY + 1, fillW, batteryH - 2, SSD1306_WHITE);
+            _display.drawRect(BATTERY_X, BATTERY_Y, BATTERY_WIDTH, BATTERY_HEIGHT, SSD1306_WHITE);
+            _display.drawRect(BATTERY_X + BATTERY_WIDTH, BATTERY_Y + BATTERY_TIP_OFFSET_Y, 
+                            BATTERY_TIP_WIDTH, BATTERY_TIP_HEIGHT, SSD1306_WHITE);
+            _display.fillRect(BATTERY_X + 1, BATTERY_Y + 1, fillWidth, BATTERY_HEIGHT - 2, SSD1306_WHITE);
 
-            if (percent < 15) {
-                d_.setTextSize(1);
-                d_.setTextColor(SSD1306_WHITE);
-                d_.setCursor(batteryX + batteryW + 2, batteryY);
-                d_.print("!");
+            if (percentage < LOW_BATTERY_THRESHOLD) {
+                _display.setTextSize(1);
+                _display.setTextColor(SSD1306_WHITE);
+                _display.setCursor(BATTERY_X + BATTERY_WIDTH + 2, BATTERY_Y);
+                _display.print("!");
             }
         }
 
-        void TA_Display::drawConnectionIcon_(Link link) {
-            int connX = d_.width() - 8;
-            int connY = 1;
-            if (link == Link::Connected) {
-                d_.drawBitmap(connX, connY, Icons::icon_connected_8x6, 8, 6, SSD1306_WHITE);
+        void DisplayController::drawConnectionIcon(ConnectionStatus status) {
+            const int ICON_X = _display.width() - 8;
+            const int ICON_Y = 1;
+            const int ICON_WIDTH = 8;
+            const int ICON_HEIGHT = 6;
+            
+            if (status == ConnectionStatus::Connected) {
+                _display.drawBitmap(ICON_X, ICON_Y, Icons::icon_connected_8x6, ICON_WIDTH, ICON_HEIGHT, SSD1306_WHITE);
             } else {
-                d_.drawBitmap(connX, connY, Icons::icon_disconnected_8x6, 8, 6, SSD1306_WHITE);
+                _display.drawBitmap(ICON_X, ICON_Y, Icons::icon_disconnected_8x6, ICON_WIDTH, ICON_HEIGHT, SSD1306_WHITE);
             }
         }
 
-        void TA_Display::drawButtonHints_(const uint8_t* left, const uint8_t* down, const uint8_t* up, const uint8_t* right) {
-            const int iconSize = style_.btnIcon;
-            const int cellW = d_.width() / 4;
-            const int y = d_.height() - iconSize;
-            const int offset = (cellW - iconSize) / 2;
-            if (left)  d_.drawBitmap(0   + offset, y, left,  iconSize, iconSize, SSD1306_WHITE);
-            if (down)  d_.drawBitmap(32  + offset, y, down,  iconSize, iconSize, SSD1306_WHITE);
-            if (up)    d_.drawBitmap(64  + offset, y, up,    iconSize, iconSize, SSD1306_WHITE);
-            if (right) d_.drawBitmap(96  + offset, y, right, iconSize, iconSize, SSD1306_WHITE);
+        void DisplayController::drawButtonHints(const uint8_t* leftIcon, const uint8_t* downIcon, const uint8_t* upIcon, const uint8_t* rightIcon) {
+            const int iconSize = _styleConfig.buttonIconSize;
+            const int cellWidth = _display.width() / 4;
+            const int yPosition = _display.height() - iconSize;
+            const int iconOffset = (cellWidth - iconSize) / 2;
+            
+            if (leftIcon)  _display.drawBitmap(0   + iconOffset, yPosition, leftIcon,  iconSize, iconSize, SSD1306_WHITE);
+            if (downIcon)  _display.drawBitmap(32  + iconOffset, yPosition, downIcon,  iconSize, iconSize, SSD1306_WHITE);
+            if (upIcon)    _display.drawBitmap(64  + iconOffset, yPosition, upIcon,    iconSize, iconSize, SSD1306_WHITE);
+            if (rightIcon) _display.drawBitmap(96  + iconOffset, yPosition, rightIcon, iconSize, iconSize, SSD1306_WHITE);
         }
 
         // Layout helpers
-        int TA_Display::topSafe_() const { return style_.statusRowH; }
-        int TA_Display::bottomSafe_() const { return d_.height() - style_.btnIcon - 2; }  // Reserve space for button hints + 2px margin
+        int DisplayController::getTopSafeArea() const { 
+            return _styleConfig.statusRowHeight; 
+        }
+        
+        int DisplayController::getBottomSafeArea() const { 
+            return _display.height() - _styleConfig.buttonIconSize - 2;  // Reserve space for button hints + 2px margin
+        }
 
-        void TA_Display::measure_(const String& s, uint8_t size, int16_t& w, int16_t& h) {
-            int16_t bx, by; uint16_t bw, bh;
-            d_.setTextSize(size);
-            d_.getTextBounds(s, 0, 0, &bx, &by, &bw, &bh);
-            w = (int16_t)bw; h = (int16_t)bh;
+        void DisplayController::measureTextDimensions(const String& text, uint8_t fontSize, int16_t& width, int16_t& height) {
+            int16_t boundsX, boundsY; 
+            uint16_t boundsWidth, boundsHeight;
+            _display.setTextSize(fontSize);
+            _display.getTextBounds(text, 0, 0, &boundsX, &boundsY, &boundsWidth, &boundsHeight);
+            width = (int16_t)boundsWidth; 
+            height = (int16_t)boundsHeight;
         }
-        int TA_Display::centerX_(int w) const { return (d_.width() - w) / 2; }
-        int TA_Display::centerYBetween_(int h, int top, int bottom) const {
-            int avail = bottom - top; return top + (avail - h) / 2;
+        
+        int DisplayController::calculateCenterX(int width) const { 
+            return (_display.width() - width) / 2; 
         }
-        void TA_Display::drawCenteredText_(const String& s, uint8_t size, int y) {
-            int16_t w, h; measure_(s, size, w, h);
-            int x = centerX_(w);
-            d_.setTextSize(size);
-            d_.setTextColor(SSD1306_WHITE);
-            d_.setCursor(x, y);
-            d_.print(s);
+        
+        int DisplayController::calculateCenterYBetween(int height, int topBound, int bottomBound) const {
+            int availableSpace = bottomBound - topBound; 
+            return topBound + (availableSpace - height) / 2;
         }
-        void TA_Display::drawTwoLineCentered_(const String& top, uint8_t topSize,
-                                              const String& bottom, uint8_t bottomSize,
-                                              int spacing, int topClamp) {
-            int16_t w1, h1, w2, h2;
-            measure_(top, topSize, w1, h1);
-            measure_(bottom, bottomSize, w2, h2);
-            int totalH = h1 + spacing + h2;
-            int yStart = centerYBetween_(totalH, topClamp, d_.height());
+        
+        void DisplayController::drawCenteredText(const String& text, uint8_t fontSize, int yPosition) {
+            int16_t width, height; 
+            measureTextDimensions(text, fontSize, width, height);
+            int xPosition = calculateCenterX(width);
+            _display.setTextSize(fontSize);
+            _display.setTextColor(SSD1306_WHITE);
+            _display.setCursor(xPosition, yPosition);
+            _display.print(text);
+        }
+        
+        void DisplayController::drawTwoLinesCentered(const String& topLine, uint8_t topFontSize,
+                                                     const String& bottomLine, uint8_t bottomFontSize,
+                                                     int lineSpacing, int topClamp) {
+            int16_t topWidth, topHeight, bottomWidth, bottomHeight;
+            measureTextDimensions(topLine, topFontSize, topWidth, topHeight);
+            measureTextDimensions(bottomLine, bottomFontSize, bottomWidth, bottomHeight);
+            
+            int totalHeight = topHeight + lineSpacing + bottomHeight;
+            int yStart = calculateCenterYBetween(totalHeight, topClamp, _display.height());
             if (yStart < topClamp) yStart = topClamp;
-            d_.setTextColor(SSD1306_WHITE);
-            d_.setTextSize(topSize);
-            d_.setCursor(centerX_(w1), yStart);
-            d_.print(top);
-            d_.setTextSize(bottomSize);
-            d_.setCursor(centerX_(w2), yStart + h1 + spacing);
-            d_.print(bottom);
+            
+            _display.setTextColor(SSD1306_WHITE);
+            _display.setTextSize(topFontSize);
+            _display.setCursor(calculateCenterX(topWidth), yStart);
+            _display.print(topLine);
+            
+            _display.setTextSize(bottomFontSize);
+            _display.setCursor(calculateCenterX(bottomWidth), yStart + topHeight + lineSpacing);
+            _display.print(bottomLine);
         }
 
-        void TA_Display::drawTwoColumnValues_(const String& left, const String& right, uint8_t textSize, uint8_t gap) {
-            d_.setTextColor(SSD1306_WHITE);
-            int16_t lw, lh, rw, rh;
-            measure_(left, textSize, lw, lh);
-            measure_(right, textSize, rw, rh);
-            int centerY = centerYBetween_(lh, topSafe_(), bottomSafe_());
-            int mid = d_.width() / 2;
-            // Left cell
-            int l0 = 0, l1 = mid - gap/2;
-            int r0 = mid + gap/2, r1 = d_.width();
-            int lx = l0 + (l1 - l0 - lw) / 2; if (lx < l0) lx = l0;
-            int rx = r0 + (r1 - r0 - rw) / 2; if (rx < r0) rx = r0;
-            d_.setTextSize(textSize);
-            d_.setCursor(lx, centerY); d_.print(left);
-            d_.setCursor(rx, centerY); d_.print(right);
-            // Underline right
-            int underlineY = centerY + rh;
-            if (underlineY < d_.height()) d_.drawLine(rx, underlineY, rx + rw, underlineY, SSD1306_WHITE);
+        void DisplayController::drawTwoColumnValues(const String& leftValue, const String& rightValue, uint8_t textSize, uint8_t gapWidth) {
+            _display.setTextColor(SSD1306_WHITE);
+            
+            int16_t leftWidth, leftHeight, rightWidth, rightHeight;
+            measureTextDimensions(leftValue, textSize, leftWidth, leftHeight);
+            measureTextDimensions(rightValue, textSize, rightWidth, rightHeight);
+            
+            int centerY = calculateCenterYBetween(leftHeight, getTopSafeArea(), getBottomSafeArea());
+            int midpoint = _display.width() / 2;
+            
+            // Calculate column boundaries
+            int leftCellStart = 0;
+            int leftCellEnd = midpoint - gapWidth/2;
+            int rightCellStart = midpoint + gapWidth/2;
+            int rightCellEnd = _display.width();
+            
+            // Center text within each column
+            int leftX = leftCellStart + (leftCellEnd - leftCellStart - leftWidth) / 2;
+            if (leftX < leftCellStart) leftX = leftCellStart;
+            
+            int rightX = rightCellStart + (rightCellEnd - rightCellStart - rightWidth) / 2;
+            if (rightX < rightCellStart) rightX = rightCellStart;
+            
+            _display.setTextSize(textSize);
+            _display.setCursor(leftX, centerY); 
+            _display.print(leftValue);
+            _display.setCursor(rightX, centerY); 
+            _display.print(rightValue);
+            
+            // Underline right value
+            int underlineY = centerY + rightHeight;
+            if (underlineY < _display.height()) {
+                _display.drawLine(rightX, underlineY, rightX + rightWidth, underlineY, SSD1306_WHITE);
+            }
+            
             // Direction arrow between columns
-            int ax = mid - 5;
-            int ay = d_.height() / 2;
-            d_.fillTriangle(ax, ay - 5, ax, ay + 5, ax + 9, ay, SSD1306_WHITE);
+            const int ARROW_WIDTH = 9;
+            const int ARROW_HEIGHT = 10;  // 5 pixels above and below center
+            int arrowX = midpoint - 5;
+            int arrowY = _display.height() / 2;
+            _display.fillTriangle(arrowX, arrowY - 5, arrowX, arrowY + 5, arrowX + ARROW_WIDTH, arrowY, SSD1306_WHITE);
         }
 
-        void TA_Display::drawDisconnected(const DisplayModel& m) {
-            drawBatteryIcon_(m.batteryPercent);
+        void DisplayController::renderDisconnectedView(const DisplayModel& model) {
+            if (model.showBatteryIcon) {
+                drawBatteryIcon(model.batteryPercentage);
+            }
 
-            // Center 20x20 icon using helpers, keeping top status row clear
-            const uint8_t* bmp = (m.link == Link::Connected) ? Icons::icon_connected_20x20 : Icons::icon_disconnected_20x20;
-            const int w = 20, h = 20;
-            const int x = centerX_(w);
-            const int y = centerYBetween_(h, topSafe_(), bottomSafe_());
-            d_.drawBitmap(x, y, bmp, w, h, SSD1306_WHITE);
+            // Center 20x20 icon, keeping top status row clear
+            const uint8_t* iconBitmap = (model.connectionStatus == ConnectionStatus::Connected) 
+                ? Icons::icon_connected_20x20 
+                : Icons::icon_disconnected_20x20;
+            const int ICON_WIDTH = 20;
+            const int ICON_HEIGHT = 20;
+            const int xPosition = calculateCenterX(ICON_WIDTH);
+            const int yPosition = calculateCenterYBetween(ICON_HEIGHT, getTopSafeArea(), getBottomSafeArea());
+            _display.drawBitmap(xPosition, yPosition, iconBitmap, ICON_WIDTH, ICON_HEIGHT, SSD1306_WHITE);
 
             // Right button hint (retry) when disconnected
-            if (m.link == Link::Disconnected && m.showReconnectHint) {
-                drawButtonHints_(nullptr, nullptr, nullptr, Icons::icon_arrow_right_6x6);
+            if (model.connectionStatus == ConnectionStatus::Disconnected && model.showReconnectHint) {
+                drawButtonHints(nullptr, nullptr, nullptr, Icons::icon_arrow_right_6x6);
             }
         }
 
-        void TA_Display::drawIdle(const DisplayModel& m) {
-            drawBatteryIcon_(m.batteryPercent);
-            drawConnectionIcon_(m.link);
-            drawButtonHints_(Icons::icon_manual_control_6x6, Icons::icon_dash_6x6, Icons::icon_plus_6x6, Icons::icon_arrow_right_6x6);
-            String currentStr = String((int)m.currentPSI);
-            String targetStr  = String((int)m.targetPSI);
-            drawTwoColumnValues_(currentStr, targetStr, style_.valueTextSize, style_.colGap);
+        void DisplayController::renderIdleView(const DisplayModel& model) {
+            if (model.showBatteryIcon) {
+                drawBatteryIcon(model.batteryPercentage);
+            }
+            drawConnectionIcon(model.connectionStatus);
+            drawButtonHints(Icons::icon_manual_control_6x6, Icons::icon_dash_6x6, 
+                          Icons::icon_plus_6x6, Icons::icon_arrow_right_6x6);
+            
+            String currentPressure = String((int)model.currentPressurePSI);
+            String targetPressure  = String((int)model.targetPressurePSI);
+            drawTwoColumnValues(currentPressure, targetPressure, _styleConfig.valueTextSize, _styleConfig.columnGap);
         }
 
-        void TA_Display::drawSeeking(const DisplayModel& m) {
-            drawBatteryIcon_(m.batteryPercent);
-            drawConnectionIcon_(m.link);
+        void DisplayController::renderSeekingView(const DisplayModel& model) {
+            if (model.showBatteryIcon) {
+                drawBatteryIcon(model.batteryPercentage);
+            }
+            drawConnectionIcon(model.connectionStatus);
 
             // Right=Cancel
-            drawButtonHints_(nullptr, nullptr, nullptr, Icons::icon_cancel_6x6);
+            drawButtonHints(nullptr, nullptr, nullptr, Icons::icon_cancel_6x6);
 
-            if (m.seekingShowDoneHold) {
-                drawCenteredText_("Done!", 2, centerYBetween_(0, topSafe_(), bottomSafe_()));
+            if (model.seekingShowDoneHold) {
+                drawCenteredText("Done!", 2, calculateCenterYBetween(0, getTopSafeArea(), getBottomSafeArea()));
                 return;
             }
 
-            const char* verb = "Ready";
-            switch (m.ctrl) {
-                case Ctrl::Idle:     verb = "Ready";        break;
-                case Ctrl::AirUp:    verb = "Inflating..."; break;
-                case Ctrl::Venting:  verb = "Deflating..."; break;
-                case Ctrl::Checking: verb = "Checking...";  break;
-                case Ctrl::Error:    verb = "Error";        break;
+            const char* statusVerb = "Ready";
+            switch (model.controllerActivity) {
+                case ControllerActivity::Idle:     statusVerb = "Ready";        break;
+                case ControllerActivity::AirUp:    statusVerb = "Inflating..."; break;
+                case ControllerActivity::Venting:  statusVerb = "Deflating..."; break;
+                case ControllerActivity::Checking: statusVerb = "Checking...";  break;
+                case ControllerActivity::Error:    statusVerb = "Error";        break;
             }
 
-            String psiStr = String((int)m.currentPSI) + " PSI";
-            drawTwoLineCentered_(verb, 1, psiStr, 2, 2, topSafe_());
+            String pressureText = String((int)model.currentPressurePSI) + " PSI";
+            drawTwoLinesCentered(statusVerb, 1, pressureText, 2, 2, getTopSafeArea());
         }
 
-        void TA_Display::drawManual(const DisplayModel& m) {
-            drawBatteryIcon_(m.batteryPercent);
-            drawConnectionIcon_(m.link);
+        void DisplayController::renderManualView(const DisplayModel& model) {
+            if (model.showBatteryIcon) {
+                drawBatteryIcon(model.batteryPercentage);
+            }
+            drawConnectionIcon(model.connectionStatus);
 
             // Left=cancel, Down=vent, Up=airup
-            drawButtonHints_(Icons::icon_cancel_6x6, Icons::icon_arrow_down_6x6, Icons::icon_arrow_up_6x6, nullptr);
+            drawButtonHints(Icons::icon_cancel_6x6, Icons::icon_arrow_down_6x6, 
+                          Icons::icon_arrow_up_6x6, nullptr);
 
-            const char* txt = "Manual";
-            if (m.ctrl == Ctrl::AirUp) txt = "Inflating...";
-            else if (m.ctrl == Ctrl::Venting) txt = "Deflating...";
-
-            drawCenteredText_(txt, 1, centerYBetween_(0, topSafe_(), bottomSafe_()));
-        }
-
-        const char* TA_Display::shortError_(uint8_t code) const {
-            return trailair::errors::getShortDescription(code);
-        }
-
-        void TA_Display::drawError(const DisplayModel& m) {
-            drawBatteryIcon_(m.batteryPercent);
-            drawConnectionIcon_(m.link);
-
-            // Right = acknowledge
-            drawButtonHints_(nullptr, nullptr, nullptr, Icons::icon_arrow_right_6x6);
-
-            const char* desc = shortError_(m.lastErrorCode);
-            String msg = desc;
-            if (strcmp(desc, "Error") == 0) {
-                msg = "E:";
-                msg += String((int)m.lastErrorCode);
+            const char* statusText = "Manual";
+            if (model.controllerActivity == ControllerActivity::AirUp) {
+                statusText = "Inflating...";
+            } else if (model.controllerActivity == ControllerActivity::Venting) {
+                statusText = "Deflating...";
             }
 
-            // Auto-size large, fallback to small
-            int16_t w, h; measure_(msg, 2, w, h);
-            uint8_t size = (w > d_.width()) ? 1 : 2;
-            drawCenteredText_(msg, size, centerYBetween_(0, topSafe_(), bottomSafe_()));
+            // Show status text and current PSI
+            String pressureText = String((int)model.currentPressurePSI) + " PSI";
+            drawTwoLinesCentered(statusText, 1, pressureText, 2, 2, getTopSafeArea());
         }
 
-        void TA_Display::drawPairing(const DisplayModel& m) {
-            drawBatteryIcon_(m.batteryPercent);
-            // No connection icon: pairing precedes link
-            // Right button = cancel
-            drawButtonHints_(nullptr, nullptr, nullptr, Icons::icon_cancel_6x6);
+        const char* DisplayController::getShortErrorDescription(uint8_t errorCode) const {
+            return trailair::errors::getShortDescription(errorCode);
+        }
 
-            const char* line = "Pairing";
-            if (m.pairingFailed) {
-                line = m.pairingBusy ? "Device Busy" : "No Device";
+        void DisplayController::renderErrorView(const DisplayModel& model) {
+            if (model.showBatteryIcon) {
+                drawBatteryIcon(model.batteryPercentage);
+            }
+            drawConnectionIcon(model.connectionStatus);
+
+            // Right = acknowledge
+            drawButtonHints(nullptr, nullptr, nullptr, Icons::icon_arrow_right_6x6);
+
+            const char* description = getShortErrorDescription(model.lastErrorCode);
+            String errorMessage = description;
+            if (strcmp(description, "Error") == 0) {
+                errorMessage = "E:";
+                errorMessage += String((int)model.lastErrorCode);
+            }
+
+            // Auto-size: use large font, fallback to small if text too wide
+            int16_t textWidth, textHeight; 
+            measureTextDimensions(errorMessage, 2, textWidth, textHeight);
+            uint8_t fontSize = (textWidth > _display.width()) ? 1 : 2;
+            drawCenteredText(errorMessage, fontSize, calculateCenterYBetween(0, getTopSafeArea(), getBottomSafeArea()));
+        }
+
+        void DisplayController::renderPairingView(const DisplayModel& model) {
+            if (model.showBatteryIcon) {
+                drawBatteryIcon(model.batteryPercentage);
+            }
+            // No connection icon: pairing precedes connection
+            
+            // Right button = cancel
+            drawButtonHints(nullptr, nullptr, nullptr, Icons::icon_cancel_6x6);
+
+            const char* statusLine = "Pairing";
+            if (model.pairingFailed) {
+                statusLine = model.pairingBusy ? "Device Busy" : "No Device";
             }
 
             // Simple dot animation while active
-            char buf[16];
-            if (m.pairingActive && !m.pairingFailed) {
-                uint8_t dots = (millis() / 500) % 4;
-                snprintf(buf, sizeof(buf), "Pairing%.*s", dots, "...");
-                line = buf;
+            char animationBuffer[16];
+            if (model.pairingActive && !model.pairingFailed) {
+                uint8_t dotCount = (millis() / 500) % 4;
+                snprintf(animationBuffer, sizeof(animationBuffer), "Pairing%.*s", dotCount, "...");
+                statusLine = animationBuffer;
             }
 
-            drawCenteredText_(line, 1, centerYBetween_(0, topSafe_(), bottomSafe_()));
+            drawCenteredText(statusLine, 1, calculateCenterYBetween(0, getTopSafeArea(), getBottomSafeArea()));
         }
+        
     } // namespace display
-} // namespace ta
+} // namespace trailair

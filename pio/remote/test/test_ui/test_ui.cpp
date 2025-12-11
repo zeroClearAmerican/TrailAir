@@ -64,15 +64,15 @@ public:
 // ============================================================================
 class UiTest : public ::testing::Test {
 protected:
-    UiStateMachine ui;
+    UserInterfaceStateMachine ui;
     MockDeviceActions device;
-    UiConfig cfg;
+    UserInterfaceConfig cfg;
 
     void SetUp() override {
-        cfg.minPsi = 5.0f;
-        cfg.maxPsi = 50.0f;
-        cfg.defaultTargetPsi = 32.0f;
-        cfg.stepSmall = 1.0f;
+        cfg.minimumPSI = 5.0f;
+        cfg.maximumPSI = 50.0f;
+        cfg.defaultTargetPSI = 32.0f;
+        cfg.stepSize = 1.0f;
         cfg.doneHoldMs = 1000;
         cfg.errorAutoClearMs = 3000;
 
@@ -90,143 +90,143 @@ protected:
 // Initialization Tests
 // ============================================================================
 TEST_F(UiTest, InitialState) {
-    EXPECT_EQ(ui.view(), View::Idle);
-    EXPECT_FLOAT_EQ(ui.targetPsi(), cfg.defaultTargetPsi);
+    EXPECT_EQ(ui.getViewState(), ViewState::Idle);
+    EXPECT_FLOAT_EQ(ui.getTargetPSI(), cfg.defaultTargetPSI);
 }
 
 TEST_F(UiTest, InitialConfig_ClampsTarget) {
-    UiConfig customCfg = cfg;
-    customCfg.defaultTargetPsi = 100.0f; // Above max
+    UserInterfaceConfig customCfg = cfg;
+    customCfg.defaultTargetPSI = 100.0f; // Above max
     ui.begin(customCfg);
-    EXPECT_FLOAT_EQ(ui.targetPsi(), customCfg.maxPsi);
+    EXPECT_FLOAT_EQ(ui.getTargetPSI(), customCfg.maximumPSI);
 }
 
 // ============================================================================
 // Idle View - Target PSI Adjustment
 // ============================================================================
 TEST_F(UiTest, Idle_UpButton_IncreasesTarget) {
-    float initial = ui.targetPsi();
-    ui.onButton(makeEvent(Button::Up, Action::Click), device);
-    EXPECT_FLOAT_EQ(ui.targetPsi(), initial + cfg.stepSmall);
+    float initial = ui.getTargetPSI();
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Click), device);
+    EXPECT_FLOAT_EQ(ui.getTargetPSI(), initial + cfg.stepSize);
 }
 
 TEST_F(UiTest, Idle_DownButton_DecreasesTarget) {
-    float initial = ui.targetPsi();
-    ui.onButton(makeEvent(Button::Down, Action::Click), device);
-    EXPECT_FLOAT_EQ(ui.targetPsi(), initial - cfg.stepSmall);
+    float initial = ui.getTargetPSI();
+    ui.onButton(makeEvent(ButtonId::Down, ButtonAction::Click), device);
+    EXPECT_FLOAT_EQ(ui.getTargetPSI(), initial - cfg.stepSize);
 }
 
 TEST_F(UiTest, Idle_UpButton_ClampsAtMax) {
-    ui.setTargetPsi(cfg.maxPsi - 0.5f);
-    ui.onButton(makeEvent(Button::Up, Action::Click), device);
-    EXPECT_FLOAT_EQ(ui.targetPsi(), cfg.maxPsi);
+    ui.setTargetPSI(cfg.maximumPSI - 0.5f);
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Click), device);
+    EXPECT_FLOAT_EQ(ui.getTargetPSI(), cfg.maximumPSI);
 }
 
 TEST_F(UiTest, Idle_DownButton_ClampsAtMin) {
-    ui.setTargetPsi(cfg.minPsi + 0.5f);
-    ui.onButton(makeEvent(Button::Down, Action::Click), device);
-    EXPECT_FLOAT_EQ(ui.targetPsi(), cfg.minPsi);
+    ui.setTargetPSI(cfg.minimumPSI + 0.5f);
+    ui.onButton(makeEvent(ButtonId::Down, ButtonAction::Click), device);
+    EXPECT_FLOAT_EQ(ui.getTargetPSI(), cfg.minimumPSI);
 }
 
 TEST_F(UiTest, Idle_MultipleClicks_AccumulateSteps) {
-    float initial = ui.targetPsi();
-    ui.onButton(makeEvent(Button::Up, Action::Click), device);
-    ui.onButton(makeEvent(Button::Up, Action::Click), device);
-    ui.onButton(makeEvent(Button::Up, Action::Click), device);
-    EXPECT_FLOAT_EQ(ui.targetPsi(), initial + 3.0f * cfg.stepSmall);
+    float initial = ui.getTargetPSI();
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Click), device);
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Click), device);
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Click), device);
+    EXPECT_FLOAT_EQ(ui.getTargetPSI(), initial + 3.0f * cfg.stepSize);
 }
 
 // ============================================================================
 // Idle View - View Transitions
 // ============================================================================
 TEST_F(UiTest, Idle_LeftClick_EntersManual) {
-    ui.onButton(makeEvent(Button::Left, Action::Click), device);
-    EXPECT_EQ(ui.view(), View::Manual);
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device);
+    EXPECT_EQ(ui.getViewState(), ViewState::Manual);
     EXPECT_EQ(device.cancelCalls, 1);
 }
 
 TEST_F(UiTest, Idle_RightClick_StartsSeeking) {
-    ui.onButton(makeEvent(Button::Right, Action::Click), device);
-    EXPECT_EQ(ui.view(), View::Seeking);
+    ui.onButton(makeEvent(ButtonId::Right, ButtonAction::Click), device);
+    EXPECT_EQ(ui.getViewState(), ViewState::Seeking);
     EXPECT_EQ(device.startSeekCalls, 1);
-    EXPECT_FLOAT_EQ(device.lastSeekTarget, ui.targetPsi());
+    EXPECT_FLOAT_EQ(device.lastSeekTarget, ui.getTargetPSI());
 }
 
 // ============================================================================
 // Manual View Tests
 // ============================================================================
 TEST_F(UiTest, Manual_DownPress_ActivatesVent) {
-    ui.onButton(makeEvent(Button::Left, Action::Click), device); // Enter manual
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device); // Enter manual
     device.reset();
 
-    ui.onButton(makeEvent(Button::Down, Action::Pressed), device);
+    ui.onButton(makeEvent(ButtonId::Down, ButtonAction::Pressed), device);
     EXPECT_EQ(device.manualVentCalls, 1);
     EXPECT_TRUE(device.lastVentState);
 }
 
 TEST_F(UiTest, Manual_DownRelease_DeactivatesVent) {
-    ui.onButton(makeEvent(Button::Left, Action::Click), device); // Enter manual
-    ui.onButton(makeEvent(Button::Down, Action::Pressed), device);
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device); // Enter manual
+    ui.onButton(makeEvent(ButtonId::Down, ButtonAction::Pressed), device);
     device.reset();
 
-    ui.onButton(makeEvent(Button::Down, Action::Released), device);
+    ui.onButton(makeEvent(ButtonId::Down, ButtonAction::Released), device);
     EXPECT_EQ(device.manualVentCalls, 1);
     EXPECT_FALSE(device.lastVentState);
 }
 
 TEST_F(UiTest, Manual_UpPress_ActivatesAir) {
-    ui.onButton(makeEvent(Button::Left, Action::Click), device); // Enter manual
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device); // Enter manual
     device.reset();
 
-    ui.onButton(makeEvent(Button::Up, Action::Pressed), device);
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Pressed), device);
     EXPECT_EQ(device.manualAirCalls, 1);
     EXPECT_TRUE(device.lastAirState);
 }
 
 TEST_F(UiTest, Manual_UpRelease_DeactivatesAir) {
-    ui.onButton(makeEvent(Button::Left, Action::Click), device); // Enter manual
-    ui.onButton(makeEvent(Button::Up, Action::Pressed), device);
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device); // Enter manual
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Pressed), device);
     device.reset();
 
-    ui.onButton(makeEvent(Button::Up, Action::Released), device);
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Released), device);
     EXPECT_EQ(device.manualAirCalls, 1);
     EXPECT_FALSE(device.lastAirState);
 }
 
 TEST_F(UiTest, Manual_LeftClick_ExitsToIdle) {
-    ui.onButton(makeEvent(Button::Left, Action::Click), device); // Enter manual
-    EXPECT_EQ(ui.view(), View::Manual);
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device); // Enter manual
+    EXPECT_EQ(ui.getViewState(), ViewState::Manual);
 
-    ui.onButton(makeEvent(Button::Left, Action::Click), device); // Exit manual
-    EXPECT_EQ(ui.view(), View::Idle);
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device); // Exit manual
+    EXPECT_EQ(ui.getViewState(), ViewState::Idle);
 }
 
 TEST_F(UiTest, Manual_ExitWhileVenting_StopsVent) {
-    ui.onButton(makeEvent(Button::Left, Action::Click), device); // Enter manual
-    ui.onButton(makeEvent(Button::Down, Action::Pressed), device); // Start venting
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device); // Enter manual
+    ui.onButton(makeEvent(ButtonId::Down, ButtonAction::Pressed), device); // Start venting
     device.reset();
 
-    ui.onButton(makeEvent(Button::Left, Action::Click), device); // Exit
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device); // Exit
     EXPECT_EQ(device.manualVentCalls, 1);
     EXPECT_FALSE(device.lastVentState);
 }
 
 TEST_F(UiTest, Manual_ExitWhileAiring_StopsAir) {
-    ui.onButton(makeEvent(Button::Left, Action::Click), device); // Enter manual
-    ui.onButton(makeEvent(Button::Up, Action::Pressed), device); // Start air
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device); // Enter manual
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Pressed), device); // Start air
     device.reset();
 
-    ui.onButton(makeEvent(Button::Left, Action::Click), device); // Exit
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device); // Exit
     EXPECT_EQ(device.manualAirCalls, 1);
     EXPECT_FALSE(device.lastAirState);
 }
 
 TEST_F(UiTest, Manual_BothButtonsPressed_BothActive) {
-    ui.onButton(makeEvent(Button::Left, Action::Click), device); // Enter manual
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device); // Enter manual
     device.reset();
 
-    ui.onButton(makeEvent(Button::Down, Action::Pressed), device);
-    ui.onButton(makeEvent(Button::Up, Action::Pressed), device);
+    ui.onButton(makeEvent(ButtonId::Down, ButtonAction::Pressed), device);
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Pressed), device);
     
     EXPECT_EQ(device.manualVentCalls, 1);
     EXPECT_EQ(device.manualAirCalls, 1);
@@ -236,25 +236,25 @@ TEST_F(UiTest, Manual_BothButtonsPressed_BothActive) {
 // Seeking View Tests
 // ============================================================================
 TEST_F(UiTest, Seeking_RightClick_Cancels) {
-    ui.onButton(makeEvent(Button::Right, Action::Click), device); // Start seek
-    EXPECT_EQ(ui.view(), View::Seeking);
+    ui.onButton(makeEvent(ButtonId::Right, ButtonAction::Click), device); // Start seek
+    EXPECT_EQ(ui.getViewState(), ViewState::Seeking);
     device.reset();
 
-    ui.onButton(makeEvent(Button::Right, Action::Click), device); // Cancel
-    EXPECT_EQ(ui.view(), View::Idle);
+    ui.onButton(makeEvent(ButtonId::Right, ButtonAction::Click), device); // Cancel
+    EXPECT_EQ(ui.getViewState(), ViewState::Idle);
     EXPECT_EQ(device.cancelCalls, 1);
 }
 
 TEST_F(UiTest, Seeking_IgnoresOtherButtons) {
-    ui.onButton(makeEvent(Button::Right, Action::Click), device); // Start seek
-    float target = ui.targetPsi();
+    ui.onButton(makeEvent(ButtonId::Right, ButtonAction::Click), device); // Start seek
+    float target = ui.getTargetPSI();
     device.reset();
 
-    ui.onButton(makeEvent(Button::Up, Action::Click), device);
-    ui.onButton(makeEvent(Button::Down, Action::Click), device);
-    ui.onButton(makeEvent(Button::Left, Action::Click), device);
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Click), device);
+    ui.onButton(makeEvent(ButtonId::Down, ButtonAction::Click), device);
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device);
     
-    EXPECT_FLOAT_EQ(ui.targetPsi(), target); // Unchanged
+    EXPECT_FLOAT_EQ(ui.getTargetPSI(), target); // Unchanged
     EXPECT_EQ(device.startSeekCalls, 0); // No new seeks
 }
 
@@ -263,48 +263,48 @@ TEST_F(UiTest, Seeking_IgnoresOtherButtons) {
 // ============================================================================
 TEST_F(UiTest, SeekingComplete_ShowsDoneHold) {
     uint32_t time = 0;
-    ui.onButton(makeEvent(Button::Right, Action::Click), device); // Start seek
-    EXPECT_EQ(ui.view(), View::Seeking);
+    ui.onButton(makeEvent(ButtonId::Right, ButtonAction::Click), device); // Start seek
+    EXPECT_EQ(ui.getViewState(), ViewState::Seeking);
 
     // Simulate controller activity
-    ui.update(time, device, Ctrl::AirUp);
+    ui.update(time, device, ControllerState::AirUp);
     time += 100;
-    ui.update(time, device, Ctrl::Checking);
+    ui.update(time, device, ControllerState::Checking);
     time += 100;
     
     // Controller reaches idle
-    ui.update(time, device, Ctrl::Idle);
-    EXPECT_EQ(ui.view(), View::Idle);
+    ui.update(time, device, ControllerState::Idle);
+    EXPECT_EQ(ui.getViewState(), ViewState::Idle);
     EXPECT_TRUE(ui.isDoneHoldActive(time));
 }
 
 TEST_F(UiTest, DoneHold_ExpiresAfterTimeout) {
     uint32_t time = 0;
-    ui.onButton(makeEvent(Button::Right, Action::Click), device);
-    ui.update(time, device, Ctrl::AirUp);
-    ui.update(time, device, Ctrl::Idle);
+    ui.onButton(makeEvent(ButtonId::Right, ButtonAction::Click), device);
+    ui.update(time, device, ControllerState::AirUp);
+    ui.update(time, device, ControllerState::Idle);
     EXPECT_TRUE(ui.isDoneHoldActive(time));
 
     time += cfg.doneHoldMs + 100;
-    ui.update(time, device, Ctrl::Idle);
+    ui.update(time, device, ControllerState::Idle);
     EXPECT_FALSE(ui.isDoneHoldActive(time));
 }
 
 TEST_F(UiTest, SeekingWithoutActivity_NoDoneHold) {
     uint32_t time = 0;
-    ui.onButton(makeEvent(Button::Right, Action::Click), device);
+    ui.onButton(makeEvent(ButtonId::Right, ButtonAction::Click), device);
     
     // Immediately idle (already at target)
-    ui.update(time, device, Ctrl::Idle);
+    ui.update(time, device, ControllerState::Idle);
     EXPECT_FALSE(ui.isDoneHoldActive(time));
 }
 
 TEST_F(UiTest, DoneHold_ClearedByCancelDuringSeeking) {
     uint32_t time = 0;
-    ui.onButton(makeEvent(Button::Right, Action::Click), device);
-    ui.update(time, device, Ctrl::AirUp);
+    ui.onButton(makeEvent(ButtonId::Right, ButtonAction::Click), device);
+    ui.update(time, device, ControllerState::AirUp);
     
-    ui.onButton(makeEvent(Button::Right, Action::Click), device); // Cancel
+    ui.onButton(makeEvent(ButtonId::Right, ButtonAction::Click), device); // Cancel
     EXPECT_FALSE(ui.isDoneHoldActive(time));
 }
 
@@ -313,38 +313,38 @@ TEST_F(UiTest, DoneHold_ClearedByCancelDuringSeeking) {
 // ============================================================================
 TEST_F(UiTest, ControllerError_EntersErrorView) {
     uint32_t time = 0;
-    ui.update(time, device, Ctrl::Error);
-    EXPECT_EQ(ui.view(), View::Error);
+    ui.update(time, device, ControllerState::Error);
+    EXPECT_EQ(ui.getViewState(), ViewState::Error);
 }
 
 TEST_F(UiTest, Error_RightClick_ClearsError) {
     uint32_t time = 0;
-    ui.update(time, device, Ctrl::Error);
-    EXPECT_EQ(ui.view(), View::Error);
+    ui.update(time, device, ControllerState::Error);
+    EXPECT_EQ(ui.getViewState(), ViewState::Error);
     device.reset();
 
-    ui.onButton(makeEvent(Button::Right, Action::Click), device);
+    ui.onButton(makeEvent(ButtonId::Right, ButtonAction::Click), device);
     EXPECT_EQ(device.clearErrorCalls, 1);
 }
 
 TEST_F(UiTest, Error_AutoClear_AfterTimeout) {
     uint32_t time = 0;
-    ui.update(time, device, Ctrl::Error);
-    EXPECT_EQ(ui.view(), View::Error);
+    ui.update(time, device, ControllerState::Error);
+    EXPECT_EQ(ui.getViewState(), ViewState::Error);
     device.reset();
 
     time += cfg.errorAutoClearMs + 100;
-    ui.update(time, device, Ctrl::Error);
+    ui.update(time, device, ControllerState::Error);
     EXPECT_EQ(device.clearErrorCalls, 1);
 }
 
 TEST_F(UiTest, Error_ExitsWhenControllerIdle) {
     uint32_t time = 0;
-    ui.update(time, device, Ctrl::Error);
-    EXPECT_EQ(ui.view(), View::Error);
+    ui.update(time, device, ControllerState::Error);
+    EXPECT_EQ(ui.getViewState(), ViewState::Error);
 
-    ui.update(time, device, Ctrl::Idle);
-    EXPECT_EQ(ui.view(), View::Idle);
+    ui.update(time, device, ControllerState::Idle);
+    EXPECT_EQ(ui.getViewState(), ViewState::Idle);
 }
 
 TEST_F(UiTest, Error_DisabledAutoClear_DoesNotClear) {
@@ -352,11 +352,11 @@ TEST_F(UiTest, Error_DisabledAutoClear_DoesNotClear) {
     ui.begin(cfg);
 
     uint32_t time = 0;
-    ui.update(time, device, Ctrl::Error);
+    ui.update(time, device, ControllerState::Error);
     device.reset();
 
     time += 10000; // Wait very long
-    ui.update(time, device, Ctrl::Error);
+    ui.update(time, device, ControllerState::Error);
     EXPECT_EQ(device.clearErrorCalls, 0); // No auto-clear
 }
 
@@ -366,20 +366,20 @@ TEST_F(UiTest, Error_DisabledAutoClear_DoesNotClear) {
 TEST_F(UiTest, Disconnected_WhenDeviceNotConnected) {
     device.connected = false;
     uint32_t time = 0;
-    ui.update(time, device, Ctrl::Idle);
-    EXPECT_EQ(ui.view(), View::Disconnected);
+    ui.update(time, device, ControllerState::Idle);
+    EXPECT_EQ(ui.getViewState(), ViewState::Disconnected);
 }
 
 TEST_F(UiTest, Disconnected_ReconnectRestoresIdle) {
     device.connected = false;
     uint32_t time = 0;
-    ui.update(time, device, Ctrl::Idle);
-    EXPECT_EQ(ui.view(), View::Disconnected);
+    ui.update(time, device, ControllerState::Idle);
+    EXPECT_EQ(ui.getViewState(), ViewState::Disconnected);
 
     // Reconnect - should restore to Idle
     device.connected = true;
-    ui.update(time, device, Ctrl::Idle);
-    EXPECT_EQ(ui.view(), View::Idle);
+    ui.update(time, device, ControllerState::Idle);
+    EXPECT_EQ(ui.getViewState(), ViewState::Idle);
 }
 
 // ============================================================================
@@ -387,82 +387,82 @@ TEST_F(UiTest, Disconnected_ReconnectRestoresIdle) {
 // ============================================================================
 TEST_F(UiTest, Update_TracksControllerState) {
     uint32_t time = 0;
-    EXPECT_EQ(ui.view(), View::Idle);
+    EXPECT_EQ(ui.getViewState(), ViewState::Idle);
 
-    ui.update(time, device, Ctrl::AirUp);
+    ui.update(time, device, ControllerState::AirUp);
     // View doesn't change to follow controller unless seeking
-    EXPECT_EQ(ui.view(), View::Idle);
+    EXPECT_EQ(ui.getViewState(), ViewState::Idle);
 }
 
 TEST_F(UiTest, SeekingView_TracksControllerActivity) {
     uint32_t time = 0;
-    ui.onButton(makeEvent(Button::Right, Action::Click), device);
-    EXPECT_EQ(ui.view(), View::Seeking);
+    ui.onButton(makeEvent(ButtonId::Right, ButtonAction::Click), device);
+    EXPECT_EQ(ui.getViewState(), ViewState::Seeking);
 
-    ui.update(time, device, Ctrl::AirUp);
-    EXPECT_EQ(ui.view(), View::Seeking);
+    ui.update(time, device, ControllerState::AirUp);
+    EXPECT_EQ(ui.getViewState(), ViewState::Seeking);
     
-    ui.update(time, device, Ctrl::Checking);
-    EXPECT_EQ(ui.view(), View::Seeking);
+    ui.update(time, device, ControllerState::Checking);
+    EXPECT_EQ(ui.getViewState(), ViewState::Seeking);
 }
 
 // ============================================================================
 // Target PSI Management Tests
 // ============================================================================
 TEST_F(UiTest, SetTargetPsi_ClampsToMin) {
-    ui.setTargetPsi(0.0f);
-    EXPECT_FLOAT_EQ(ui.targetPsi(), cfg.minPsi);
+    ui.setTargetPSI(0.0f);
+    EXPECT_FLOAT_EQ(ui.getTargetPSI(), cfg.minimumPSI);
 }
 
 TEST_F(UiTest, SetTargetPsi_ClampsToMax) {
-    ui.setTargetPsi(100.0f);
-    EXPECT_FLOAT_EQ(ui.targetPsi(), cfg.maxPsi);
+    ui.setTargetPSI(100.0f);
+    EXPECT_FLOAT_EQ(ui.getTargetPSI(), cfg.maximumPSI);
 }
 
 TEST_F(UiTest, SetTargetPsi_ValidRange) {
-    ui.setTargetPsi(25.0f);
-    EXPECT_FLOAT_EQ(ui.targetPsi(), 25.0f);
+    ui.setTargetPSI(25.0f);
+    EXPECT_FLOAT_EQ(ui.getTargetPSI(), 25.0f);
 }
 
 // ============================================================================
 // Edge Cases
 // ============================================================================
 TEST_F(UiTest, RapidButtonPresses_HandleCorrectly) {
-    ui.onButton(makeEvent(Button::Up, Action::Click), device);
-    ui.onButton(makeEvent(Button::Down, Action::Click), device);
-    ui.onButton(makeEvent(Button::Left, Action::Click), device);
-    ui.onButton(makeEvent(Button::Right, Action::Click), device);
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Click), device);
+    ui.onButton(makeEvent(ButtonId::Down, ButtonAction::Click), device);
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device);
+    ui.onButton(makeEvent(ButtonId::Right, ButtonAction::Click), device);
     
     // Should not crash, state should be valid
-    EXPECT_TRUE(ui.view() == View::Idle || 
-                ui.view() == View::Manual || 
-                ui.view() == View::Seeking);
+    EXPECT_TRUE(ui.getViewState() == ViewState::Idle || 
+                ui.getViewState() == ViewState::Manual || 
+                ui.getViewState() == ViewState::Seeking);
 }
 
 TEST_F(UiTest, PressedWithoutRelease_HandleGracefully) {
-    ui.onButton(makeEvent(Button::Left, Action::Click), device); // Manual
-    ui.onButton(makeEvent(Button::Up, Action::Pressed), device);
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device); // Manual
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Pressed), device);
     
     // No release - exit manual
-    ui.onButton(makeEvent(Button::Left, Action::Click), device);
-    EXPECT_EQ(ui.view(), View::Idle);
+    ui.onButton(makeEvent(ButtonId::Left, ButtonAction::Click), device);
+    EXPECT_EQ(ui.getViewState(), ViewState::Idle);
 }
 
 TEST_F(UiTest, Config_MinMaxEqual_DoesNotCrash) {
-    UiConfig badCfg = cfg;
-    badCfg.minPsi = 20.0f;
-    badCfg.maxPsi = 20.0f;
+    UserInterfaceConfig badCfg = cfg;
+    badCfg.minimumPSI = 20.0f;
+    badCfg.maximumPSI = 20.0f;
     ui.begin(badCfg);
     
-    ui.onButton(makeEvent(Button::Up, Action::Click), device);
-    ui.onButton(makeEvent(Button::Down, Action::Click), device);
+    ui.onButton(makeEvent(ButtonId::Up, ButtonAction::Click), device);
+    ui.onButton(makeEvent(ButtonId::Down, ButtonAction::Click), device);
     
-    EXPECT_FLOAT_EQ(ui.targetPsi(), 20.0f);
+    EXPECT_FLOAT_EQ(ui.getTargetPSI(), 20.0f);
 }
 
 TEST_F(UiTest, AccessorsReturnCorrectValues) {
-    EXPECT_FLOAT_EQ(ui.minPsi(), cfg.minPsi);
-    EXPECT_FLOAT_EQ(ui.maxPsi(), cfg.maxPsi);
+    EXPECT_FLOAT_EQ(ui.minimumPSI(), cfg.minimumPSI);
+    EXPECT_FLOAT_EQ(ui.maximumPSI(), cfg.maximumPSI);
 }
 
 // ============================================================================

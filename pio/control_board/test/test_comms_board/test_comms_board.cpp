@@ -112,9 +112,9 @@ TEST_F(CommsBoardTest, ISRSafety_ConcurrentReadWrite_NoRaceCondition) {
     
     // Create a request packet
     uint8_t packet[2];
-    ta::protocol::Request req;
-    req.kind = ta::protocol::Request::Kind::Ping;
-    ta::protocol::packRequest(packet, req);
+    trailair::protocol::Request req;
+    req.kind = trailair::protocol::Request::Kind::Ping;
+    trailair::protocol::packRequest(packet, req);
     
     // Manually set paired state for this test
     uint8_t mac[6] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06};
@@ -228,9 +228,9 @@ TEST_F(CommsBoardTest, RemoteActivity_InactiveWhenUnpaired) {
     
     // Even if we receive a packet, should be inactive when unpaired
     uint8_t packet[2];
-    ta::protocol::Request req;
-    req.kind = ta::protocol::Request::Kind::Ping;
-    ta::protocol::packRequest(packet, req);
+    trailair::protocol::Request req;
+    req.kind = trailair::protocol::Request::Kind::Ping;
+    trailair::protocol::packRequest(packet, req);
     
     simulateRecvFromISR(testPeer, packet, 2);
     
@@ -259,15 +259,15 @@ TEST_F(CommsBoardTest, RequestCallback_NotInvokedWhenUnpaired) {
     ASSERT_TRUE(link->begin());
     
     bool callbackInvoked = false;
-    link->setRequestCallback([](void* ctx, const ta::protocol::Request& req) {
+    link->setRequestCallback([](void* ctx, const trailair::protocol::Request& req) {
         bool* invoked = static_cast<bool*>(ctx);
         *invoked = true;
     }, &callbackInvoked);
     
     uint8_t packet[2];
-    ta::protocol::Request req;
-    req.kind = ta::protocol::Request::Kind::Ping;
-    ta::protocol::packRequest(packet, req);
+    trailair::protocol::Request req;
+    req.kind = trailair::protocol::Request::Kind::Ping;
+    trailair::protocol::packRequest(packet, req);
     
     simulateRecvFromISR(testPeer, packet, 2);
     
@@ -282,7 +282,7 @@ TEST_F(CommsBoardTest, Protocol_IgnoresInvalidPackets) {
     ASSERT_TRUE(link->begin());
     
     bool callbackInvoked = false;
-    link->setRequestCallback([](void* ctx, const ta::protocol::Request& req) {
+    link->setRequestCallback([](void* ctx, const trailair::protocol::Request& req) {
         bool* invoked = static_cast<bool*>(ctx);
         *invoked = true;
     }, &callbackInvoked);
@@ -298,16 +298,16 @@ TEST_F(CommsBoardTest, Protocol_IgnoresPacketsFromWrongPeer) {
     ASSERT_TRUE(link->begin());
     
     bool callbackInvoked = false;
-    link->setRequestCallback([](void* ctx, const ta::protocol::Request& req) {
+    link->setRequestCallback([](void* ctx, const trailair::protocol::Request& req) {
         bool* invoked = static_cast<bool*>(ctx);
         *invoked = true;
     }, &callbackInvoked);
     
     // Valid packet but from wrong peer
     uint8_t packet[2];
-    ta::protocol::Request req;
-    req.kind = ta::protocol::Request::Kind::Ping;
-    ta::protocol::packRequest(packet, req);
+    trailair::protocol::Request req;
+    req.kind = trailair::protocol::Request::Kind::Ping;
+    trailair::protocol::packRequest(packet, req);
     
     uint8_t wrongPeer[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     simulateRecvFromISR(wrongPeer, packet, 2);
@@ -325,7 +325,7 @@ TEST_F(CommsBoardTest, Pairing_HandlesPairRequest) {
     
     // Simulate pair request
     uint8_t pairReq[2];
-    ta::protocol::packPairReq(pairReq, 0x01);
+    trailair::protocol::packPairingRequest(pairReq, 0x01);
     
     simulateRecvFromISR(testPeer, pairReq, 2);
     
@@ -338,7 +338,7 @@ TEST_F(CommsBoardTest, Pairing_ForgetClearsPeer) {
     
     // Pair first
     uint8_t pairReq[2];
-    ta::protocol::packPairReq(pairReq, 0x01);
+    trailair::protocol::packPairingRequest(pairReq, 0x01);
     simulateRecvFromISR(testPeer, pairReq, 2);
     
     ASSERT_TRUE(link->isPaired());

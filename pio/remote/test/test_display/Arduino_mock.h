@@ -1,6 +1,6 @@
 /**
  * Minimal Arduino.h mock for display testing
- * Provides only what TA_Display needs
+ * Provides only what DisplayController needs
  */
 
 #pragma once

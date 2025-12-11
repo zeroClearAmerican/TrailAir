@@ -13,7 +13,14 @@
 #define SCREEN_ADDRESS 0x3C
 Adafruit_SSD1306 d_(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-ta::app::App app(&d_);
+// Button pins for on-board override controls
+// Left: D7 (GPIO20), Down: D6 (GPIO21), Up: D3 (GPIO5), Right: D2 (GPIO4)
+#define BTN_LEFT_PIN   20
+#define BTN_DOWN_PIN   21
+#define BTN_UP_PIN     5
+#define BTN_RIGHT_PIN  4
+
+trailair::app::App app(&d_, trailair::app::App::Pins(BTN_LEFT_PIN, BTN_DOWN_PIN, BTN_UP_PIN, BTN_RIGHT_PIN));
 
 void setup() {
   // CRITICAL: Set actuator pins to OUTPUT/LOW immediately to prevent spurious activation

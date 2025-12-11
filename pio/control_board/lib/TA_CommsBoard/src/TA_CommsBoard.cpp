@@ -1,7 +1,7 @@
 #include "TA_CommsBoard.h"
 #include <Arduino.h>
 
-using namespace ta::comms;
+using namespace trailair::comms;
 
 // Static instance used by C callbacks to reach the current object
 BoardLink* BoardLink::inst_ = nullptr;
@@ -97,7 +97,7 @@ bool BoardLink::sendStatus(char statusChar, float psi) {
   p[0] = (uint8_t)statusChar;
   p[1] = (statusChar == 'E')
          ? psi  // psi holds error code when E
-         : ta::protocol::psiToByte05(psi);
+         : trailair::protocol::convertPSIToByte(psi);
   return esp_now_send(peer_, p, 2) == ESP_OK;
 }
 
@@ -121,18 +121,18 @@ void BoardLink::handlePairReq_(const uint8_t* mac, uint8_t group) {
     Serial.println("    [BoardLink] Not paired - accepting pairing request");
     savePeer_(mac);
     ensurePeer_(mac);
-    uint8_t ack[2]; ta::protocol::packPairAck(ack, groupId_);
+    uint8_t ack[2]; trailair::protocol::packPairingAcknowledge(ack, groupId_);
     esp_now_send(peer_, ack, 2);
     Serial.println("    [BoardLink] Paired (saved); Ack sent.");
   } else {
     if (memcmp(mac, peer_, 6) == 0) {
-      uint8_t ack[2]; ta::protocol::packPairAck(ack, groupId_);
+      uint8_t ack[2]; trailair::protocol::packPairingAcknowledge(ack, groupId_);
       esp_now_send(peer_, ack, 2);
       Serial.println("    [BoardLink] Re-Ack existing peer");
     } else {
       Serial.printf("    [BoardLink] Busy: already paired to %02X:%02X:%02X:%02X:%02X:%02X\n",
                     peer_[0], peer_[1], peer_[2], peer_[3], peer_[4], peer_[5]);
-      uint8_t busy[2]; ta::protocol::packPairBusy(busy, 1);
+      uint8_t busy[2]; trailair::protocol::packPairingBusy(busy, 1);
       esp_now_send(mac, busy, 2);
       Serial.println("    [BoardLink] Busy response sent.");
     }
@@ -140,12 +140,12 @@ void BoardLink::handlePairReq_(const uint8_t* mac, uint8_t group) {
 }
 
 void BoardLink::onRecv(const uint8_t* mac, const uint8_t* data, int len) {
-  using namespace ta::protocol;
+  using namespace trailair::protocol;
   
   // Check for pairing frames
   if (len == 2 && isPairingFrame(data, len)) {
-    PairMsg pm;
-    if (parsePair(data, len, pm) && pm.op == PairOp::Req) {
+    PairingMessage pm;
+    if (parsePairingMessage(data, len, pm) && pm.operation == PairingOperation::Request) {
       handlePairReq_(mac, pm.value);
     }
     return;

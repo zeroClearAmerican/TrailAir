@@ -12,265 +12,296 @@ inline uint32_t millis() { return 0; }
 #endif
 #include <math.h>
 
-using namespace ta::ctl;
+using namespace trailair::controller;
 
 // Adapter implementations
 #ifndef UNIT_TEST
-void Controller::ActuatorAdapter::setCompressor(bool on) { if (hw) hw->setCompressor(on); }
-void Controller::ActuatorAdapter::setVent(bool open) { if (hw) hw->setVent(open); }
-void Controller::ActuatorAdapter::stopAll() { if (hw) hw->stopAll(); }
+void PressureController::ActuatorAdapter::setCompressor(bool enable) {
+  if (hardware) hardware->setCompressor(enable);
+}
+void PressureController::ActuatorAdapter::setVent(bool open) {
+  if (hardware) hardware->setVent(open);
+}
+void PressureController::ActuatorAdapter::stopAll() {
+  if (hardware) hardware->stopAll();
+}
 #else
 // Stub implementations for unit tests (vtable needs these)
-void Controller::ActuatorAdapter::setCompressor(bool) {}
-void Controller::ActuatorAdapter::setVent(bool) {}
-void Controller::ActuatorAdapter::stopAll() {}
+void PressureController::ActuatorAdapter::setCompressor(bool) {}
+void PressureController::ActuatorAdapter::setVent(bool) {}
+void PressureController::ActuatorAdapter::stopAll() {}
 #endif
 
 #ifndef UNIT_TEST
-void Controller::begin(ta::act::Actuators* act, const Config& cfg) {
-  cfg_ = cfg;
-  actAdapter_.hw = act;
-  out_ = act ? static_cast<IOutputs*>(&actAdapter_) : nullptr;
-  reset_();
+void PressureController::begin(ta::act::Actuators* actuators, const ControllerConfig& config) {
+  _config = config;
+  _actuatorAdapter.hardware = actuators;
+  _outputs = actuators ? static_cast<IActuatorOutputs*>(&_actuatorAdapter) : nullptr;
+  reset();
 }
 #endif
 
-void Controller::begin(IOutputs* outputs, const Config& cfg) {
-  cfg_ = cfg;
-  out_ = outputs;
-  actAdapter_.hw = nullptr;
-  reset_();
+void PressureController::begin(IActuatorOutputs* outputs, const ControllerConfig& config) {
+  _config = config;
+  _outputs = outputs;
+  _actuatorAdapter.hardware = nullptr;
+  reset();
 }
 
-void Controller::reset_() {
-  state_ = State::IDLE;
-  prev_ = State::IDLE;
-  targetPsi_ = 0;
-  manualActive_ = false;
-  inContinuous_ = false;
-  upRate_ = downRate_ = 0;
-  upSamples_ = downSamples_ = 0;
-  noChangeBurstCount_ = 0;
-  errorCode_ = ErrorCode::NONE;
+void PressureController::reset() {
+  _state = ControllerState::Idle;
+  _previousState = ControllerState::Idle;
+  _targetPSI = 0.0f;
+  _isManualActive = false;
+  _isContinuousPhase = false;
+  _inflationRatePSIPerSecond = 0.0f;
+  _deflationRatePSIPerSecond = 0.0f;
+  _inflationSampleCount = 0;
+  _deflationSampleCount = 0;
+  _noChangeDetectionCount = 0;
+  _errorCode = ErrorCode::None;
 }
 
-void Controller::stopOutputs_() {
-  if (out_) out_->stopAll();
+void PressureController::stopAllOutputs() {
+  if (_outputs) _outputs->stopAll();
 }
 
-char Controller::statusChar() const {
-  switch (state_) {
-    case State::IDLE:     return 'I';
-    case State::AIRUP:    return 'U';
-    case State::VENTING:  return 'V';
-    case State::CHECKING: return 'C';
-    case State::ERROR:    return 'E';
+char PressureController::getStatusCharacter() const {
+  switch (_state) {
+    case ControllerState::Idle:     return 'I';
+    case ControllerState::AirUp:    return 'U';
+    case ControllerState::Venting:  return 'V';
+    case ControllerState::Checking: return 'C';
+    case ControllerState::Error:    return 'E';
   }
   return 'I';
 }
 
-void Controller::enter_(State s, uint32_t now) {
-  prev_ = state_;
-  state_ = s;
-  if (s == State::CHECKING) {
-    phaseEndMs_ = now + cfg_.settleMs;
+void PressureController::enterState(ControllerState state, uint32_t now) {
+  _previousState = _state;
+  _state = state;
+  if (state == ControllerState::Checking) {
+    _phaseEndTime = now + _config.settleDurationMilliseconds;
   }
 }
 
-void Controller::manualAirUp(bool active) {
-  manualActive_ = active;
-  lastManualRefreshMs_ = millis();
-  if (!out_) return;
+void PressureController::manualAirUp(bool active) {
+  _isManualActive = active;
+  _lastManualRefreshTime = millis();
+  if (!_outputs) return;
   if (active) {
-    out_->setCompressor(true);
-    state_ = State::AIRUP;
+    _outputs->setCompressor(true);
+    _state = ControllerState::AirUp;
   } else {
-    stopOutputs_();
-    state_ = State::IDLE;
+    stopAllOutputs();
+    _state = ControllerState::Idle;
   }
 }
 
-void Controller::manualVent(bool active) {
-  manualActive_ = active;
-  lastManualRefreshMs_ = millis();
-  if (!out_) return;
+void PressureController::manualVent(bool active) {
+  _isManualActive = active;
+  _lastManualRefreshTime = millis();
+  if (!_outputs) return;
   if (active) {
-    out_->setVent(true);
-    state_ = State::VENTING;
+    _outputs->setVent(true);
+    _state = ControllerState::Venting;
   } else {
-    stopOutputs_();
-    state_ = State::IDLE;
+    stopAllOutputs();
+    _state = ControllerState::Idle;
   }
 }
 
-void Controller::cancel() {
-  manualActive_ = false;
-  inContinuous_ = false;
-  stopOutputs_();
-  targetPsi_ = 0;
-  if (state_ != State::ERROR) state_ = State::IDLE;
-}
-
-void Controller::clearError() {
-  if (state_ == State::ERROR) {
-    errorCode_ = ErrorCode::NONE;
-    state_ = State::IDLE;
+void PressureController::cancel() {
+  _isManualActive = false;
+  _isContinuousPhase = false;
+  stopAllOutputs();
+  _targetPSI = 0.0f;
+  if (_state != ControllerState::Error) {
+    _state = ControllerState::Idle;
   }
 }
 
-void Controller::startSeek(float t) {
-  if (t < cfg_.minPsi) t = cfg_.minPsi;
-  if (t > cfg_.maxPsi) t = cfg_.maxPsi;
-  targetPsi_ = t;
-  manualActive_ = false;
-  inContinuous_ = false;
-  upRate_ = downRate_ = 0;
-  upSamples_ = downSamples_ = 0;
-  noChangeBurstCount_ = 0;
+void PressureController::clearError() {
+  if (_state == ControllerState::Error) {
+    _errorCode = ErrorCode::None;
+    _state = ControllerState::Idle;
+  }
+}
 
-  stopOutputs_();
-  float diff = targetPsi_ - currentPsi_;
-  if (fabsf(diff) <= cfg_.psiTol) {
-    state_ = State::IDLE;
+void PressureController::startSeek(float targetPSI) {
+  if (targetPSI < _config.minimumPSI) targetPSI = _config.minimumPSI;
+  if (targetPSI > _config.maximumPSI) targetPSI = _config.maximumPSI;
+  _targetPSI = targetPSI;
+  _isManualActive = false;
+  _isContinuousPhase = false;
+  _inflationRatePSIPerSecond = 0.0f;
+  _deflationRatePSIPerSecond = 0.0f;
+  _inflationSampleCount = 0;
+  _deflationSampleCount = 0;
+  _noChangeDetectionCount = 0;
+
+  stopAllOutputs();
+  float difference = _targetPSI - _currentPSI;
+  if (fabsf(difference) <= _config.pressureTolerancePSI) {
+    _state = ControllerState::Idle;
     return;
   }
-  scheduleBurst_(diff > 0 ? State::AIRUP : State::VENTING, cfg_.burstMsInit, millis());
+  scheduleBurst(
+    difference > 0 ? ControllerState::AirUp : ControllerState::Venting,
+    _config.initialBurstDurationMilliseconds,
+    millis()
+  );
 }
 
-void Controller::scheduleBurst_(State dir, unsigned long durMs, uint32_t now) {
-  phaseStartPsi_ = currentPsi_;
-  phaseStartMs_ = now;
-  phaseEndMs_ = now + durMs;
-  inContinuous_ = false;
-  if (!out_) return;
-  if (dir == State::AIRUP) {
-    out_->setCompressor(true);
-    state_ = State::AIRUP;
+void PressureController::scheduleBurst(ControllerState direction, uint32_t durationMilliseconds, uint32_t now) {
+  _phaseStartPressure = _currentPSI;
+  _phaseStartTime = now;
+  _phaseEndTime = now + durationMilliseconds;
+  _isContinuousPhase = false;
+  if (!_outputs) return;
+  if (direction == ControllerState::AirUp) {
+    _outputs->setCompressor(true);
+    _state = ControllerState::AirUp;
   } else {
-    out_->setVent(true);
-    state_ = State::VENTING;
+    _outputs->setVent(true);
+    _state = ControllerState::Venting;
   }
 }
 
-void Controller::enterError_(ErrorCode ec, const char* /*why*/) {
-  errorCode_ = ec;
-  stopOutputs_();
-  manualActive_ = false;
-  inContinuous_ = false;
-  state_ = State::ERROR;
+void PressureController::enterErrorState(ErrorCode errorCode, const char* /*reason*/) {
+  _errorCode = errorCode;
+  stopAllOutputs();
+  _isManualActive = false;
+  _isContinuousPhase = false;
+  _state = ControllerState::Error;
 }
 
-void Controller::handleRunPhase_(State runState, uint32_t now) {
-  float remaining = targetPsi_ - currentPsi_;
-  if (fabsf(remaining) <= cfg_.psiTol) {
-    stopOutputs_();
-    enter_(State::CHECKING, now);
-    lastBurstEndMs_ = now;
+void PressureController::handleRunPhase(ControllerState runState, uint32_t now) {
+  float remaining = _targetPSI - _currentPSI;
+  if (fabsf(remaining) <= _config.pressureTolerancePSI) {
+    stopAllOutputs();
+    enterState(ControllerState::Checking, now);
+    _lastBurstEndTime = now;
     return;
   }
   // End burst / continuous phases
-  if (now >= phaseEndMs_) {
-    stopOutputs_();
-    enter_(State::CHECKING, now);
-    lastBurstEndMs_ = now;
+  if (now >= _phaseEndTime) {
+    stopAllOutputs();
+    enterState(ControllerState::Checking, now);
+    _lastBurstEndTime = now;
     return;
   }
   (void)runState; // placeholder for per-mode nuances
 }
 
-void Controller::handleChecking_(uint32_t now) {
-  if (now < phaseEndMs_) return;
+void PressureController::handleCheckingPhase(uint32_t now) {
+  if (now < _phaseEndTime) return;
 
-  float dt = (lastBurstEndMs_ > phaseStartMs_)
-             ? (lastBurstEndMs_ - phaseStartMs_) / 1000.0f
-             : (now - phaseStartMs_) / 1000.0f;
-  float dPsi = currentPsi_ - phaseStartPsi_;
+  float deltaTimeSeconds = (_lastBurstEndTime > _phaseStartTime)
+                         ? (_lastBurstEndTime - _phaseStartTime) / 1000.0f
+                         : (now - _phaseStartTime) / 1000.0f;
+  float deltaPressure = _currentPSI - _phaseStartPressure;
 
-  if (dt > cfg_.checkDtMinSec) {
-    if (dPsi > cfg_.dPsiNoiseEps) {
-      upRate_ = (upRate_ * upSamples_ + (fabsf(dPsi) / dt)) / (upSamples_ + 1);
-      upSamples_++;
-    } else if (dPsi < -cfg_.dPsiNoiseEps) {
-      downRate_ = (downRate_ * downSamples_ + (fabsf(dPsi) / dt)) / (downSamples_ + 1);
-      downSamples_++;
+  if (deltaTimeSeconds > _config.minimumCheckIntervalSeconds) {
+    if (deltaPressure > _config.pressureNoiseThresholdPSI) {
+      _inflationRatePSIPerSecond = (_inflationRatePSIPerSecond * _inflationSampleCount + (fabsf(deltaPressure) / deltaTimeSeconds)) / (_inflationSampleCount + 1);
+      _inflationSampleCount++;
+    } else if (deltaPressure < -_config.pressureNoiseThresholdPSI) {
+      _deflationRatePSIPerSecond = (_deflationRatePSIPerSecond * _deflationSampleCount + (fabsf(deltaPressure) / deltaTimeSeconds)) / (_deflationSampleCount + 1);
+      _deflationSampleCount++;
     }
-    if (!inContinuous_) {
-      if (fabsf(dPsi) < cfg_.noChangeEps) {
-        noChangeBurstCount_++;
-        if (noChangeBurstCount_ >= cfg_.maxNoChangeBursts) {
-          enterError_(ErrorCode::NO_CHANGE, "No change");
+    if (!_isContinuousPhase) {
+      if (fabsf(deltaPressure) < _config.noChangeThresholdPSI) {
+        _noChangeDetectionCount++;
+        if (_noChangeDetectionCount >= _config.maximumNoChangeBursts) {
+          enterErrorState(ErrorCode::NoChange, "No change");
           return;
         }
       } else {
-        noChangeBurstCount_ = 0;
+        _noChangeDetectionCount = 0;
       }
     } else {
-      noChangeBurstCount_ = 0;
+      _noChangeDetectionCount = 0;
     }
   }
 
-  float remaining = targetPsi_ - currentPsi_;
-  if (fabsf(remaining) <= cfg_.psiTol) {
-    state_ = State::IDLE;
-    stopOutputs_();
+  float remaining = _targetPSI - _currentPSI;
+  if (fabsf(remaining) <= _config.pressureTolerancePSI) {
+    _state = ControllerState::Idle;
+    stopAllOutputs();
     return;
   }
 
-  bool needUp = remaining > 0;
-  bool haveRate = needUp ? (upSamples_ >= 2 && upRate_ > cfg_.rateMinEps)
-                         : (downSamples_ >= 2 && downRate_ > cfg_.rateMinEps);
-  if (haveRate) {
-    float rate = needUp ? upRate_ : downRate_;
-    unsigned long predictedFullMs = (unsigned long)(1000.0f * (fabsf(remaining) / rate));
-    if (predictedFullMs > cfg_.maxContinuousMs) {
-      enterError_(ErrorCode::EXCESSIVE_TIME, "Too long");
+  bool needInflation = remaining > 0;
+  bool haveLearnedRate = needInflation
+    ? (_inflationSampleCount >= 2 && _inflationRatePSIPerSecond > _config.minimumRateThreshold)
+    : (_deflationSampleCount >= 2 && _deflationRatePSIPerSecond > _config.minimumRateThreshold);
+    
+  if (haveLearnedRate) {
+    float rate = needInflation ? _inflationRatePSIPerSecond : _deflationRatePSIPerSecond;
+    uint32_t predictedFullDuration = (uint32_t)(1000.0f * (fabsf(remaining) / rate));
+    if (predictedFullDuration > _config.maximumContinuousDurationMilliseconds) {
+      enterErrorState(ErrorCode::ExcessiveTime, "Too long");
       return;
     }
-    float aim = fmaxf(0.0f, fabsf(remaining) - cfg_.aimMarginPsi);
-    unsigned long runMs = (unsigned long)(1000.0f * (aim / rate));
-    if (runMs < cfg_.runMinMs) runMs = cfg_.runMinMs;
-    if (runMs > cfg_.runMaxMs) runMs = cfg_.runMaxMs;
+    float aimDistance = fmaxf(0.0f, fabsf(remaining) - _config.approachMarginPSI);
+    uint32_t runDuration = (uint32_t)(1000.0f * (aimDistance / rate));
+    if (runDuration < _config.minimumRunDurationMilliseconds) {
+      runDuration = _config.minimumRunDurationMilliseconds;
+    }
+    if (runDuration > _config.maximumRunDurationMilliseconds) {
+      runDuration = _config.maximumRunDurationMilliseconds;
+    }
     // schedule continuous
-    inContinuous_ = true;
-    phaseStartPsi_ = currentPsi_;
-    phaseStartMs_ = now;
-    phaseEndMs_ = now + runMs;
-    if (needUp) { state_ = State::AIRUP; if (out_) out_->setCompressor(true); }
-    else        { state_ = State::VENTING;  if (out_) out_->setVent(true); }
+    _isContinuousPhase = true;
+    _phaseStartPressure = _currentPSI;
+    _phaseStartTime = now;
+    _phaseEndTime = now + runDuration;
+    if (needInflation) {
+      _state = ControllerState::AirUp;
+      if (_outputs) _outputs->setCompressor(true);
+    } else {
+      _state = ControllerState::Venting;
+      if (_outputs) _outputs->setVent(true);
+    }
   } else {
-    scheduleBurst_(needUp ? State::AIRUP : State::VENTING, cfg_.burstMsInit, now);
+    scheduleBurst(
+      needInflation ? ControllerState::AirUp : ControllerState::Venting,
+      _config.initialBurstDurationMilliseconds,
+      now
+    );
   }
 }
 
-void Controller::handleIdle_(uint32_t /*now*/) {
-  stopOutputs_();
+void PressureController::handleIdleState(uint32_t /*now*/) {
+  stopAllOutputs();
 }
 
-void Controller::update(uint32_t now, float currentPsi) {
-  currentPsi_ = currentPsi;
+void PressureController::update(uint32_t currentTimeMilliseconds, float currentPressurePSI) {
+  _currentPSI = currentPressurePSI;
 
   // Manual watchdog
-  if (manualActive_) {
-    if (now - lastManualRefreshMs_ > cfg_.manualRefreshTimeoutMs) {
-      manualActive_ = false;
-      stopOutputs_();
-      state_ = State::IDLE;
+  if (_isManualActive) {
+    if (currentTimeMilliseconds - _lastManualRefreshTime > _config.manualRefreshTimeoutMilliseconds) {
+      _isManualActive = false;
+      stopAllOutputs();
+      _state = ControllerState::Idle;
     }
   }
 
-  if (state_ == State::ERROR || manualActive_) return;
+  if (_state == ControllerState::Error || _isManualActive) return;
 
-  switch (state_) {
-    case State::AIRUP:
-    case State::VENTING:
-      handleRunPhase_(state_, now);
+  switch (_state) {
+    case ControllerState::AirUp:
+    case ControllerState::Venting:
+      handleRunPhase(_state, currentTimeMilliseconds);
       break;
-    case State::CHECKING:
-      handleChecking_(now);
+    case ControllerState::Checking:
+      handleCheckingPhase(currentTimeMilliseconds);
       break;
-    case State::IDLE:
+    case ControllerState::Idle:
     default:
-      handleIdle_(now);
+      handleIdleState(currentTimeMilliseconds);
       break;
   }
 }

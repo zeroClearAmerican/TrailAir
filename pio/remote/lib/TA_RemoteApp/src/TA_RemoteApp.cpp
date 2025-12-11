@@ -7,7 +7,7 @@
 #include <TA_Config.h>
 #include <TA_Time.h>  // Overflow-safe time utilities
 
-namespace ta { namespace app {
+namespace trailair { namespace app {
 
 void RemoteApp::begin() {
   // Battery monitor
@@ -21,9 +21,9 @@ void RemoteApp::begin() {
 
   // Buttons -> state
   buttons_.begin();
-  buttons_.subscribe([](void* ctx, const ta::input::Event& e){
+  buttons_.subscribe([](void* ctx, const trailair::input::ButtonEvent& e){
     auto* self = static_cast<RemoteApp*>(ctx);
-    self->lastButtonPressedMs_ = ta::time::getMillis();
+    self->lastButtonPressedMs_ = trailair::time::getMilliseconds();
     self->state_.onButton(e);
   }, this);
 
@@ -53,7 +53,7 @@ void RemoteApp::begin() {
 
   delay(500);
   if (ui_) {
-    ui_->startLogoWipe(ta::display::Icons::logo_bmp, ta::display::Icons::LogoW, ta::display::Icons::LogoH, false, 5);
+    ui_->startLogoWipe(trailair::display::Icons::logo_bmp, trailair::display::Icons::LogoW, trailair::display::Icons::LogoH, false, 5);
     // Wait for wipe to complete before continuing
     while (ui_->isLogoWipeActive()) {
       ui_->updateLogoWipe();
@@ -62,17 +62,17 @@ void RemoteApp::begin() {
   }
 }
 
-void RemoteApp::onStatusStatic_(void* ctx, const ta::protocol::Response& msg) {
+void RemoteApp::onStatusStatic_(void* ctx, const trailair::protocol::Response& msg) {
   static_cast<RemoteApp*>(ctx)->onStatus_(msg);
 }
-void RemoteApp::onPairEventStatic_(void* ctx, ta::comms::PairEvent ev, const uint8_t mac[6]) {
+void RemoteApp::onPairEventStatic_(void* ctx, trailair::comms::PairEvent ev, const uint8_t mac[6]) {
   static_cast<RemoteApp*>(ctx)->onPairEvent_(ev, mac);
 }
 
-void RemoteApp::onStatus_(const ta::protocol::Response& msg) {
+void RemoteApp::onStatus_(const trailair::protocol::Response& msg) {
   state_.onStatus(msg);
 }
-void RemoteApp::onPairEvent_(ta::comms::PairEvent ev, const uint8_t mac[6]) {
+void RemoteApp::onPairEvent_(trailair::comms::PairEvent ev, const uint8_t mac[6]) {
   state_.onPairEvent(ev, mac);
 }
 
@@ -87,9 +87,9 @@ void RemoteApp::goToSleep_() {
   Serial.println("Entering light sleep...");
   link_.sendCancel();
   if (ui_) {
-    ui_->drawLogo(ta::display::Icons::logo_bmp, ta::display::Icons::LogoW, ta::display::Icons::LogoH);
+    ui_->drawLogo(trailair::display::Icons::logo_bmp, trailair::display::Icons::LogoW, trailair::display::Icons::LogoH);
     delay(1000);
-    ui_->startLogoWipe(ta::display::Icons::logo_bmp, ta::display::Icons::LogoW, ta::display::Icons::LogoH, false, 5);
+    ui_->startLogoWipe(trailair::display::Icons::logo_bmp, trailair::display::Icons::LogoW, trailair::display::Icons::LogoH, false, 5);
     // Wait for wipe to complete before sleeping
     while (ui_->isLogoWipeActive()) {
       ui_->updateLogoWipe();
@@ -110,8 +110,23 @@ void RemoteApp::goToSleep_() {
     return; // Will loop back into sleep without WiFi init
   }
   
-  // Re-init after wake
-  if (link_.hasPeer()) link_.requestReconnect();
+  // Re-initialize WiFi and ESP-NOW after wake
+  Serial.println("Reinitializing communication after wake...");
+  if (link_.hasPeer()) {
+    // Reinit ESP-NOW (WiFi was stopped during sleep)
+    if (!link_.begin(nullptr)) {
+      Serial.println("ESP-NOW reinit after wake failed!");
+    }
+    // Configure link again
+    const trailair::config::CommunicationConfiguration linkCfg{};
+    link_.setConnectionTimeoutMs(linkCfg.connectionTimeoutMilliseconds);
+    link_.setPingBackoffStartMs(linkCfg.pingBackoffStartMilliseconds);
+    link_.setPairReqIntervalMs(linkCfg.pairingRequestIntervalMilliseconds);
+    link_.setStatusCallback(&RemoteApp::onStatusStatic_, this);
+    link_.setPairCallback(&RemoteApp::onPairEventStatic_, this);
+    // Now request reconnection
+    link_.requestReconnect();
+  }
   state_.resetAfterWake();
 }
 
@@ -149,7 +164,7 @@ void RemoteApp::loop() {
 
   // Read buttons
   buttons_.service();
-  if (ta::time::hasElapsed(ta::time::getMillis(), lastButtonPressedMs_, SLEEP_TIMEOUT_MS_)) {
+  if (trailair::time::hasElapsed(trailair::time::getMilliseconds(), lastButtonPressedMs_, SLEEP_TIMEOUT_MS_)) {
     Serial.println("Sleep timeout exceeded.");
     goToSleep_();
   }
@@ -171,14 +186,14 @@ void RemoteApp::loop() {
   bool isConnIng = link_.isConnecting();
 
   // State update
-  state_.update(ta::time::getMillis(), isConn, isConnIng);
+  state_.update(trailair::time::getMilliseconds(), isConn, isConnIng);
   if (state_.takeSleepRequest()) {
     goToSleep_();
   }
 
   // Render
   if (ui_) {
-    ta::display::DisplayModel dm;
+    trailair::display::DisplayModel dm;
     state_.buildDisplayModel(dm);
     ui_->render(dm);
   }
