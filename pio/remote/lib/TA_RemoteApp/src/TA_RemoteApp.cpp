@@ -16,7 +16,7 @@ void RemoteApp::begin() {
   // Display
   if (ui_ && disp_) {
     const uint8_t SCREEN_ADDRESS = 0x3C;
-    ui_->begin(SCREEN_ADDRESS, true);
+    ui_->begin(SCREEN_ADDRESS, true);  // Don't show boot logo, we'll do wipe-out later
   }
 
   // Buttons -> state
@@ -51,9 +51,8 @@ void RemoteApp::begin() {
 
   state_.begin();
 
-  delay(500);
+  // Show logo and wipe it out before starting main UI
   if (ui_) {
-    ui_->startLogoWipe(trailair::display::Icons::logo_bmp, trailair::display::Icons::LogoW, trailair::display::Icons::LogoH, false, 5);
     // Wait for wipe to complete before continuing
     while (ui_->isLogoWipeActive()) {
       ui_->updateLogoWipe();
