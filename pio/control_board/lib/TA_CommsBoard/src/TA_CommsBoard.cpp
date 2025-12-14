@@ -91,22 +91,26 @@ void BoardLink::ensurePeer_(const uint8_t mac[6]) {
   esp_now_add_peer(&pi);
 }
 
-bool BoardLink::sendStatus(char statusChar, float psi) {
+bool BoardLink::sendStatus(char statusChar, char uiStateChar, float currentPsi, float targetPsi) {
   if (!paired_) return false;
-  uint8_t p[2];
+  uint8_t p[4];
   p[0] = (uint8_t)statusChar;
-  p[1] = (statusChar == 'E')
-         ? psi  // psi holds error code when E
-         : trailair::protocol::convertPSIToByte(psi);
-  return esp_now_send(peer_, p, 2) == ESP_OK;
+  p[1] = (uint8_t)uiStateChar;
+  p[2] = (statusChar == 'E')
+         ? (uint8_t)currentPsi  // currentPsi holds error code when E
+         : trailair::protocol::convertPSIToByte(currentPsi);
+  p[3] = trailair::protocol::convertPSIToByte(targetPsi);
+  return esp_now_send(peer_, p, 4) == ESP_OK;
 }
 
 bool BoardLink::sendError(uint8_t errorCode) {
   if (!paired_) return false;
-  uint8_t p[2];
+  uint8_t p[4];
   p[0] = 'E';
-  p[1] = errorCode;
-  return esp_now_send(peer_, p, 2) == ESP_OK;
+  p[1] = 'E';  // Error UI state
+  p[2] = errorCode;
+  p[3] = 0;    // No target PSI during error
+  return esp_now_send(peer_, p, 4) == ESP_OK;
 }
 
 void BoardLink::handlePairReq_(const uint8_t* mac, uint8_t group) {

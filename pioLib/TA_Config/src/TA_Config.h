@@ -36,8 +36,8 @@ struct UserInterfaceConfiguration {
  * wireless communication link between remote and control board.
  */
 struct CommunicationConfiguration {
-  /// Control board: timeout to consider remote as inactive
-  uint32_t remoteActiveTimeoutMilliseconds = 3000;
+  /// Control board: timeout to consider remote as inactive (should be > 2x ping interval)
+  uint32_t remoteActiveTimeoutMilliseconds = 5000;
   
   /// Remote: timeout to consider connection lost
   uint32_t connectionTimeoutMilliseconds = 5000;

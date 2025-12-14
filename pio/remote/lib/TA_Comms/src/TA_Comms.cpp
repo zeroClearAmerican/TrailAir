@@ -94,9 +94,48 @@ namespace trailair { namespace comms {
             trailair::protocol::packRequest(p, r);
             return sendRaw_(p);
         }
-        bool EspNowLink::sendPing() {
+        bool EspNowLink::sendPing(float targetPsi) {
             uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
-            trailair::protocol::Request r; r.kind = trailair::protocol::Request::Kind::Ping;
+            trailair::protocol::Request r; 
+            r.kind = trailair::protocol::Request::Kind::Ping;
+            r.targetPSI = targetPsi;
+            trailair::protocol::packRequest(p, r);
+            return sendRaw_(p);
+        }
+        
+        // New button-based API (thin client protocol)
+        bool EspNowLink::sendButtonPress(trailair::protocol::ButtonId button) {
+            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
+            trailair::protocol::Request r;
+            r.kind = trailair::protocol::Request::Kind::ButtonPress;
+            r.button = button;
+            trailair::protocol::packRequest(p, r);
+            return sendRaw_(p);
+        }
+        
+        bool EspNowLink::sendButtonRelease(trailair::protocol::ButtonId button) {
+            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
+            trailair::protocol::Request r;
+            r.kind = trailair::protocol::Request::Kind::ButtonRelease;
+            r.button = button;
+            trailair::protocol::packRequest(p, r);
+            return sendRaw_(p);
+        }
+        
+        bool EspNowLink::sendButtonClick(trailair::protocol::ButtonId button) {
+            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
+            trailair::protocol::Request r;
+            r.kind = trailair::protocol::Request::Kind::ButtonClick;
+            r.button = button;
+            trailair::protocol::packRequest(p, r);
+            return sendRaw_(p);
+        }
+        
+        bool EspNowLink::sendButtonLongHold(trailair::protocol::ButtonId button) {
+            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
+            trailair::protocol::Request r;
+            r.kind = trailair::protocol::Request::Kind::ButtonLongHold;
+            r.button = button;
             trailair::protocol::packRequest(p, r);
             return sendRaw_(p);
         }
@@ -274,17 +313,26 @@ namespace trailair { namespace comms {
                 lastSeen = lastSeenMs_;
                 portEXIT_CRITICAL(&isrMux_);
 
+                // Check for connection timeout
                 if (isConnected_ && trailair::time::hasElapsed(now, lastSeen, connectionTimeoutMs_)) {
                     isConnected_ = false;
         #if TA_COMMS_DEBUG
                     Serial.println("Connection lost.");
         #endif
                 }
-                if (isConnecting_ && !isConnected_) {
+                
+                // Send periodic pings when connecting OR when connected (to keep alive)
+                if ((isConnecting_ && !isConnected_) || isConnected_) {
                     if (trailair::time::isTimeFor(now, nextPingAtMs_)) {
-                        sendPing();
-                        nextPingAtMs_ = trailair::time::calculateFutureTime(now, pingBackoffMs_);
-                        pingBackoffMs_ = min(pingBackoffMs_ * 2, pingBackoffMaxMs_);
+                        sendPing(targetPsi_);  // Include current target PSI in ping
+                        if (isConnected_) {
+                            // When connected, ping every 2 seconds to keep connection alive
+                            nextPingAtMs_ = trailair::time::calculateFutureTime(now, 2000);
+                        } else {
+                            // When connecting, use exponential backoff
+                            nextPingAtMs_ = trailair::time::calculateFutureTime(now, pingBackoffMs_);
+                            pingBackoffMs_ = min(pingBackoffMs_ * 2, pingBackoffMaxMs_);
+                        }
                     }
                 }
             }
@@ -327,8 +375,16 @@ namespace trailair { namespace comms {
           lastSeenMs_ = millis();
           portEXIT_CRITICAL(&isrMux_);
 
+          // Transition to connected state
+          bool wasConnecting = isConnecting_;
           isConnected_ = true;
           isConnecting_ = false;
+          
+          // Reset ping interval to 2 seconds when first connecting
+          if (wasConnecting) {
+              pingBackoffMs_ = 200; // Reset backoff for next disconnect
+              nextPingAtMs_ = trailair::time::calculateFutureTime(millis(), 2000);
+          }
 
           if (cb_) cb_(cbCtx_, sm);
         }

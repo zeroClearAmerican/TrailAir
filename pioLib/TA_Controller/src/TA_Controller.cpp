@@ -87,7 +87,6 @@ void PressureController::enterState(ControllerState state, uint32_t now) {
 
 void PressureController::manualAirUp(bool active) {
   _isManualActive = active;
-  _lastManualRefreshTime = millis();
   if (!_outputs) return;
   if (active) {
     _outputs->setCompressor(true);
@@ -100,7 +99,6 @@ void PressureController::manualAirUp(bool active) {
 
 void PressureController::manualVent(bool active) {
   _isManualActive = active;
-  _lastManualRefreshTime = millis();
   if (!_outputs) return;
   if (active) {
     _outputs->setVent(true);
@@ -280,15 +278,9 @@ void PressureController::handleIdleState(uint32_t /*now*/) {
 void PressureController::update(uint32_t currentTimeMilliseconds, float currentPressurePSI) {
   _currentPSI = currentPressurePSI;
 
-  // Manual watchdog
-  if (_isManualActive) {
-    if (currentTimeMilliseconds - _lastManualRefreshTime > _config.manualRefreshTimeoutMilliseconds) {
-      _isManualActive = false;
-      stopAllOutputs();
-      _state = ControllerState::Idle;
-    }
-  }
-
+  // Manual mode is now controlled purely by manualAirUp()/manualVent() calls
+  // No watchdog needed - Released events stop the action explicitly
+  
   if (_state == ControllerState::Error || _isManualActive) return;
 
   switch (_state) {

@@ -166,7 +166,7 @@ namespace trailair {
             const int BATTERY_TIP_HEIGHT = 2;
             const int LOW_BATTERY_THRESHOLD = 15;
             
-            int fillWidth = (int)((constrain(percentage, 0, 98) / 100.0f) * (BATTERY_WIDTH - 2));
+            int fillWidth = (int)((constrain(percentage, 0, 100) / 100.0f) * (BATTERY_WIDTH - 2));
 
             _display.drawRect(BATTERY_X, BATTERY_Y, BATTERY_WIDTH, BATTERY_HEIGHT, SSD1306_WHITE);
             _display.drawRect(BATTERY_X + BATTERY_WIDTH, BATTERY_Y + BATTERY_TIP_OFFSET_Y, 
@@ -251,7 +251,8 @@ namespace trailair {
             measureTextDimensions(bottomLine, bottomFontSize, bottomWidth, bottomHeight);
             
             int totalHeight = topHeight + lineSpacing + bottomHeight;
-            int yStart = calculateCenterYBetween(totalHeight, topClamp, _display.height());
+            // Use bottom safe area to avoid overlapping button hints
+            int yStart = calculateCenterYBetween(totalHeight, topClamp, getBottomSafeArea());
             if (yStart < topClamp) yStart = topClamp;
             
             _display.setTextColor(SSD1306_WHITE);

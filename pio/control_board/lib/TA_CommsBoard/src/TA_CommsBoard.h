@@ -23,7 +23,7 @@ public:
   void forget();
 
   // Status
-  bool sendStatus(char statusChar, float psi);
+  bool sendStatus(char statusChar, char uiStateChar, float currentPsi, float targetPsi);
   bool sendError(uint8_t errorCode);
 
   // Registration

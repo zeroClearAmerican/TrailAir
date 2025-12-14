@@ -38,6 +38,8 @@ namespace trailair { namespace stateboard {
                              uint32_t now) const;
 
       float targetPsi() const { return ui_.getTargetPSI(); }
+      void setTargetPsi(float psi) { ui_.setTargetPSI(psi); }
+      
       UiState uiState() const {
         using V = trailair::ui::ViewState;
         switch (ui_.getViewState()) {
@@ -46,6 +48,17 @@ namespace trailair { namespace stateboard {
           case V::Seeking: return UiState::Seeking;
           case V::Error: return UiState::Error;
           default: return UiState::Idle;
+        }
+      }
+      
+      // Get UI state as protocol character for transmission
+      char getUIStateChar() const {
+        switch (uiState()) {
+          case UiState::Idle: return 'I';
+          case UiState::Manual: return 'M';
+          case UiState::Seeking: return 'S';
+          case UiState::Error: return 'E';
+          default: return 'I';
         }
       }
 

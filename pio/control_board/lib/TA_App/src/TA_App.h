@@ -64,10 +64,14 @@ private:
   // Buttons (optional)
   bool hasButtons_ = false;
   trailair::input::ButtonManager* buttons_ = nullptr;
+  
+  // Remote command translation: track last command to detect transitions
+  trailair::protocol::Request::Kind lastRemoteCommand_ = trailair::protocol::Request::Kind::Idle;
+  trailair::protocol::ManualMode lastRemoteManualMode_ = trailair::protocol::ManualMode::Vent;
 
   // Timing
   uint32_t lastStatusMs_ = 0;
-  static constexpr uint32_t STATUS_INTERVAL_MS_ = 1000;
+  static constexpr uint32_t STATUS_INTERVAL_MS_ = 200;  // 200ms = 5 updates/sec for responsive UI
 };
 
 }} // namespace trailair::app

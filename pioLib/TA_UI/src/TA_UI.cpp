@@ -82,27 +82,28 @@ void UserInterfaceStateMachine::onButton(const ButtonEvent& event, DeviceActions
 
     case ViewState::Manual: {
       if (event.action == ButtonAction::Click && event.id == ButtonId::Left) {
-        if (_isManualVentActive) deviceActions.manualVent(false);
-        if (_isManualAirActive) deviceActions.manualAirUp(false);
+        // Exit manual mode - stop everything
+        deviceActions.manualVent(false);
+        deviceActions.manualAirUp(false);
         _isManualVentActive = _isManualAirActive = false;
         _viewState = ViewState::Idle;
         break;
       }
       if (event.action == ButtonAction::Pressed) {
-        if (event.id == ButtonId::Down && !_isManualVentActive) {
+        if (event.id == ButtonId::Down) {
           deviceActions.manualVent(true);
           _isManualVentActive = true;
         }
-        if (event.id == ButtonId::Up && !_isManualAirActive) {
+        if (event.id == ButtonId::Up) {
           deviceActions.manualAirUp(true);
           _isManualAirActive = true;
         }
       } else if (event.action == ButtonAction::Released) {
-        if (event.id == ButtonId::Down && _isManualVentActive) {
+        if (event.id == ButtonId::Down) {
           deviceActions.manualVent(false);
           _isManualVentActive = false;
         }
-        if (event.id == ButtonId::Up && _isManualAirActive) {
+        if (event.id == ButtonId::Up) {
           deviceActions.manualAirUp(false);
           _isManualAirActive = false;
         }

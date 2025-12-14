@@ -8,11 +8,18 @@ namespace protocol {
 /**
  * @brief Communication protocol for TrailAir remote <-> control board
  * 
- * All messages are exactly 2 bytes for simplicity and reliability.
+ * Request messages (remote → board): 2 bytes
+ * Response messages (board → remote): 4 bytes (includes UI state and target PSI)
  * Uses ASCII characters for opcodes to aid debugging.
  */
 
-/// @brief Standard payload size for all protocol messages (2 bytes)
+/// @brief Standard request payload size (2 bytes)
+static constexpr int REQUEST_LENGTH = 2;
+
+/// @brief Standard response payload size (4 bytes - status, uiState, currentPSI, targetPSI) 
+static constexpr int RESPONSE_LENGTH = 4;
+
+/// @brief Legacy 2-byte payload constant (deprecated, use REQUEST_LENGTH or RESPONSE_LENGTH)
 static constexpr int PAYLOAD_LENGTH = 2;
 
 /**
@@ -34,10 +41,29 @@ enum class StatusCode : uint8_t {
  * First byte of request messages.
  */
 enum class CommandCode : uint8_t {
+  // Button-based commands (new thin client protocol)
+  ButtonPress   = 'D',  ///< Button pressed (Down)
+  ButtonRelease = 'U',  ///< Button released (Up)
+  ButtonClick   = 'C',  ///< Button clicked
+  ButtonLongHold = 'L', ///< Button long-held
+  
+  // Legacy high-level commands (deprecated, for backward compatibility)
   Start  = 'S',  ///< Start seeking to target pressure
   Idle   = 'I',  ///< Cancel operation / return to idle
   Manual = 'M',  ///< Manual control mode
   Ping   = 'P'   ///< Keep-alive ping
+};
+
+/**
+ * @brief Button identifier for button-based protocol
+ * 
+ * Maps to trailair::input::ButtonId on both remote and board.
+ */
+enum class ButtonId : uint8_t {
+  Left  = 0,  ///< Left button (cancel/exit/manual)
+  Down  = 1,  ///< Down button (decrease/vent)
+  Up    = 2,  ///< Up button (increase/air)
+  Right = 3   ///< Right button (start/confirm)
 };
 
 /**
@@ -57,6 +83,19 @@ enum class PairingOperation : uint8_t {
 enum class ManualMode : uint8_t {
   Vent = 0x00,  ///< Manual venting (deflate)
   Air  = 0xFF   ///< Manual air up (inflate)
+};
+
+/**
+ * @brief UI view state transmitted from board to remote
+ * 
+ * Indicates which screen/mode the control board is in.
+ * Remote displays this state to stay in sync with board.
+ */
+enum class UIState : uint8_t {
+  Idle    = 'I',  ///< Idle screen showing current/target PSI
+  Manual  = 'M',  ///< Manual control mode
+  Seeking = 'S',  ///< Seeking to target PSI
+  Error   = 'E'   ///< Error screen
 };
 
 /**
@@ -87,22 +126,36 @@ struct Request {
    * @brief Type of request being made
    */
   enum class Kind {
+    // Button-based commands (new thin client protocol)
+    ButtonPress,    ///< Button pressed down
+    ButtonRelease,  ///< Button released
+    ButtonClick,    ///< Button clicked (short tap)
+    ButtonLongHold, ///< Button long-held
+    
+    // Legacy high-level commands (deprecated)
     Idle,    ///< Cancel / return to idle
     Start,   ///< Start seeking to target
     Manual,  ///< Manual control mode
+    
     Ping     ///< Keep-alive ping
-  } kind = Kind::Idle;
+  } kind = Kind::Ping;
 
-  float targetPSI = 0.0f;              ///< Target pressure (used when kind==Start)
+  // Button-based protocol fields
+  ButtonId button = ButtonId::Left;  ///< Which button (for button commands)
+  
+  // Legacy fields (deprecated, for backward compatibility)
+  float targetPSI = 0.0f;              ///< Target pressure (used when kind==Start or Ping)
   ManualMode manualMode = ManualMode::Vent;  ///< Manual mode (used when kind==Manual)
 };
 
 /**
- * @brief Response message from Control Board to Remote
+ * @brief Response message from Control Board to Remote (4 bytes)
  */
 struct Response {
   StatusCode status = StatusCode::Idle;  ///< Current controller status
-  uint8_t value = 0;  ///< PSI (0.5 units) for non-Error; error code if status==Error
+  UIState uiState = UIState::Idle;       ///< Current UI view state on board
+  uint8_t value = 0;  ///< Current PSI (0.5 units) for non-Error; error code if status==Error
+  uint8_t targetPSI = 0;  ///< Target PSI (0.5 units) - allows remote to sync target
 };
 
 /**
@@ -120,6 +173,25 @@ struct PairingMessage {
  */
 inline void packRequest(uint8_t output[PAYLOAD_LENGTH], const Request& request) {
   switch (request.kind) {
+    // Button-based commands (new protocol)
+    case Request::Kind::ButtonPress:
+      output[0] = static_cast<uint8_t>(CommandCode::ButtonPress);
+      output[1] = static_cast<uint8_t>(request.button);
+      break;
+    case Request::Kind::ButtonRelease:
+      output[0] = static_cast<uint8_t>(CommandCode::ButtonRelease);
+      output[1] = static_cast<uint8_t>(request.button);
+      break;
+    case Request::Kind::ButtonClick:
+      output[0] = static_cast<uint8_t>(CommandCode::ButtonClick);
+      output[1] = static_cast<uint8_t>(request.button);
+      break;
+    case Request::Kind::ButtonLongHold:
+      output[0] = static_cast<uint8_t>(CommandCode::ButtonLongHold);
+      output[1] = static_cast<uint8_t>(request.button);
+      break;
+    
+    // Legacy commands (backward compatibility)
     case Request::Kind::Idle:
       output[0] = static_cast<uint8_t>(CommandCode::Idle);
       output[1] = 0;
@@ -134,7 +206,7 @@ inline void packRequest(uint8_t output[PAYLOAD_LENGTH], const Request& request) 
       break;
     case Request::Kind::Ping:
       output[0] = static_cast<uint8_t>(CommandCode::Ping);
-      output[1] = 0;
+      output[1] = convertPSIToByte(request.targetPSI);  // Include target PSI in pings
       break;
   }
 }
@@ -149,6 +221,25 @@ inline void packRequest(uint8_t output[PAYLOAD_LENGTH], const Request& request) 
 inline bool parseRequest(const uint8_t* data, int length, Request& output) {
   if (length != PAYLOAD_LENGTH) return false;
   switch (static_cast<CommandCode>(data[0])) {
+    // Button-based commands (new protocol)
+    case CommandCode::ButtonPress:
+      output.kind = Request::Kind::ButtonPress;
+      output.button = static_cast<ButtonId>(data[1]);
+      break;
+    case CommandCode::ButtonRelease:
+      output.kind = Request::Kind::ButtonRelease;
+      output.button = static_cast<ButtonId>(data[1]);
+      break;
+    case CommandCode::ButtonClick:
+      output.kind = Request::Kind::ButtonClick;
+      output.button = static_cast<ButtonId>(data[1]);
+      break;
+    case CommandCode::ButtonLongHold:
+      output.kind = Request::Kind::ButtonLongHold;
+      output.button = static_cast<ButtonId>(data[1]);
+      break;
+    
+    // Legacy commands (backward compatibility)
     case CommandCode::Idle:
       output.kind = Request::Kind::Idle;
       output.targetPSI = 0.0f;
@@ -163,6 +254,7 @@ inline bool parseRequest(const uint8_t* data, int length, Request& output) {
       break;
     case CommandCode::Ping:
       output.kind = Request::Kind::Ping;
+      output.targetPSI = convertByteToPSI(data[1]);  // Extract target PSI from ping
       break;
     default:
       return false;
@@ -171,24 +263,79 @@ inline bool parseRequest(const uint8_t* data, int length, Request& output) {
 }
 
 /**
- * @brief Parse 2-byte payload into Response
+ * @brief Parse response payload into Response struct
  * @param data Input buffer
- * @param length Buffer length (must be PAYLOAD_LENGTH)
+ * @param length Buffer length
  * @param output Parsed response output
  * @return true if parse successful, false otherwise
+ * 
+ * Supports multiple format versions for backward compatibility:
+ * - 2 bytes (legacy): status + value
+ * - 3 bytes: status + uiState + value
+ * - 4 bytes (current): status + uiState + currentPSI + targetPSI
  */
 inline bool parseResponse(const uint8_t* data, int length, Response& output) {
-  if (length != PAYLOAD_LENGTH) return false;
-  switch (data[0]) {
-    case 'I': output.status = StatusCode::Idle; break;
-    case 'U': output.status = StatusCode::AirUp; break;
-    case 'V': output.status = StatusCode::Venting; break;
-    case 'C': output.status = StatusCode::Checking; break;
-    case 'E': output.status = StatusCode::Error; break;
-    default: return false;
+  // Legacy 2-byte format: status + value (no UI state)
+  if (length == PAYLOAD_LENGTH) {
+    switch (data[0]) {
+      case 'I': output.status = StatusCode::Idle; output.uiState = UIState::Idle; break;
+      case 'U': output.status = StatusCode::AirUp; break;
+      case 'V': output.status = StatusCode::Venting; break;
+      case 'C': output.status = StatusCode::Checking; break;
+      case 'E': output.status = StatusCode::Error; output.uiState = UIState::Error; break;
+      default: return false;
+    }
+    output.value = data[1];
+    output.targetPSI = 0;
+    // Infer UI state from controller status for old format
+    if (output.status != StatusCode::Error && output.status != StatusCode::Idle) {
+      if (output.uiState == UIState::Idle) output.uiState = UIState::Seeking;
+    }
+    return true;
+  } 
+  // 3-byte format: status + uiState + value (no target PSI)
+  else if (length == 3) {
+    switch (data[0]) {
+      case 'I': output.status = StatusCode::Idle; break;
+      case 'U': output.status = StatusCode::AirUp; break;
+      case 'V': output.status = StatusCode::Venting; break;
+      case 'C': output.status = StatusCode::Checking; break;
+      case 'E': output.status = StatusCode::Error; break;
+      default: return false;
+    }
+    switch (data[1]) {
+      case 'I': output.uiState = UIState::Idle; break;
+      case 'M': output.uiState = UIState::Manual; break;
+      case 'S': output.uiState = UIState::Seeking; break;
+      case 'E': output.uiState = UIState::Error; break;
+      default: return false;
+    }
+    output.value = data[2];
+    output.targetPSI = 0;
+    return true;
   }
-  output.value = data[1];
-  return true;
+  // Current 4-byte format: status + uiState + currentPSI + targetPSI
+  else if (length == RESPONSE_LENGTH) {
+    switch (data[0]) {
+      case 'I': output.status = StatusCode::Idle; break;
+      case 'U': output.status = StatusCode::AirUp; break;
+      case 'V': output.status = StatusCode::Venting; break;
+      case 'C': output.status = StatusCode::Checking; break;
+      case 'E': output.status = StatusCode::Error; break;
+      default: return false;
+    }
+    switch (data[1]) {
+      case 'I': output.uiState = UIState::Idle; break;
+      case 'M': output.uiState = UIState::Manual; break;
+      case 'S': output.uiState = UIState::Seeking; break;
+      case 'E': output.uiState = UIState::Error; break;
+      default: return false;
+    }
+    output.value = data[2];
+    output.targetPSI = data[3];
+    return true;
+  }
+  return false;
 }
 
 /**

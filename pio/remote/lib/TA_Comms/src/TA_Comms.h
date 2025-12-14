@@ -36,14 +36,22 @@ namespace trailair { namespace comms {
                 bool begin(const uint8_t peerMac[6]);
 
                 // Send commands
+                // New button-based API (thin client protocol)
+                bool sendButtonPress(trailair::protocol::ButtonId button);
+                bool sendButtonRelease(trailair::protocol::ButtonId button);
+                bool sendButtonClick(trailair::protocol::ButtonId button);
+                bool sendButtonLongHold(trailair::protocol::ButtonId button);
+                
+                // Legacy high-level commands (deprecated, for backward compatibility)
                 bool sendStart(float targetPsi);
                 bool sendCancel();
                 bool sendManual(uint8_t code);
-                bool sendPing();
+                bool sendPing(float targetPsi = 0.0f);
 
                 // Reconnect ping logic with backoff (call service() in loop)
                 void requestReconnect();
                 void service();
+                void setTargetPsi(float psi) { targetPsi_ = psi; }  // Update target PSI for ping messages
 
                 // Connection state (derived from lastSeen + timeout)
                 void setConnectionTimeoutMs(uint32_t ms) { connectionTimeoutMs_ = ms; }
@@ -111,6 +119,7 @@ namespace trailair { namespace comms {
                 uint32_t nextPingAtMs_ = 0;
                 uint32_t pingBackoffMs_ = 200;
                 const uint32_t pingBackoffMaxMs_ = 2000;
+                float targetPsi_ = 0.0f;  // Current target PSI to send in pings
 
                 // Persistence
                 Preferences prefs_;

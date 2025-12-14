@@ -18,7 +18,7 @@ struct Config {
 
   // Percent mapping (LiPo 1S typical)
   float vEmpty = 3.30f;        ///< Voltage at 0% (battery protection threshold)
-  float vFull  = 4.14f;        ///< Voltage at 100%
+  float vFull  = 4.00f;        ///< Voltage at 100%
   int lowPercent = 15;         ///< Low battery threshold percentage
 };
 
@@ -45,22 +45,22 @@ public:
   // Accessors
   
   /// @brief Get filtered battery voltage in millivolts
-  int   millivolts()   const { return filteredMv_; }
+  int   millivolts()   const { return _filteredMillivolts; }
   
   /// @brief Get filtered battery voltage in volts
-  float voltage()      const { return filteredMv_ / 1000.0f; }
+  float voltage()      const { return _filteredMillivolts / 1000.0f; }
   
   /// @brief Get estimated battery charge percentage (0-100)
-  int   percent()      const { return percent_; }
+  int   percent()      const { return _estimatedPercentage; }
   
   /// @brief Check if battery is below low threshold
-  bool  isLow()        const { return percent_ <= cfg_.lowPercent; }
+  bool  isLow()        const { return _estimatedPercentage <= _batteryConfig.lowPercent; }
   
   /// @brief Check if battery is at or below empty threshold
-  bool  isCritical()   const { return voltage() <= cfg_.vEmpty; }
+  bool  isCritical()   const { return voltage() <= _batteryConfig.vEmpty; }
   
   /// @brief Check if first valid reading has been obtained
-  bool  hasFix()       const { return hasFix_; }
+  bool  hasFix()       const { return _hasFixOnRead; }
 
   // Maintenance
   
@@ -68,10 +68,10 @@ public:
   void  reset();
 
   /// @brief Update configuration at runtime (clears buffers)
-  void  setConfig(const Config& cfg) { cfg_ = cfg; clampConfig_(); reset(); }
+  void  setConfig(const Config& cfg) { _batteryConfig = cfg; clampConfig_(); reset(); }
   
   /// @brief Get current configuration
-  const Config& config() const { return cfg_; }
+  const Config& config() const { return _batteryConfig; }
 
 private:
   void clampConfig_();
@@ -82,8 +82,8 @@ private:
 private:
   static constexpr uint8_t MAX_SAMPLES = 32;
 
-  Config cfg_;
-  uint8_t pin_ = 0;
+  Config _batteryConfig;
+  uint8_t _analogReadPin = 0;
   int attenEnum_ = 0;
 
   int   buf_[MAX_SAMPLES] = {0};
@@ -91,9 +91,9 @@ private:
   uint8_t count_ = 0;
   long  sum_ = 0;
 
-  int filteredMv_ = 0;   ///< Battery-side mV after deadbanded average
-  int percent_    = 0;   ///< Estimated charge percentage
-  bool hasFix_    = false; ///< First valid reading obtained
+  int _filteredMillivolts = 0;   ///< Battery-side mV after deadbanded average
+  int _estimatedPercentage    = 0;   ///< Estimated charge percentage
+  bool _hasFixOnRead    = false; ///< First valid reading obtained
 };
 
 } // namespace battery

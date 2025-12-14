@@ -14,8 +14,20 @@ namespace {
       case SmartButton::Event::RELEASED:   return ButtonAction::Released;
       case SmartButton::Event::CLICK:      return ButtonAction::Click;
       case SmartButton::Event::LONG_HOLD:  return ButtonAction::LongHold;
+      // Ignore HOLD and HOLD_REPEAT - manual mode uses Pressed/Released only
+      case SmartButton::Event::HOLD:
+      case SmartButton::Event::HOLD_REPEAT:
+      case SmartButton::Event::LONG_HOLD_REPEAT:
       default:                             return ButtonAction::Click;
     }
+  }
+  
+  /// Returns true if event should be forwarded to subscribers
+  static inline bool shouldForwardEvent(SmartButton::Event event) {
+    // Skip HOLD, HOLD_REPEAT, LONG_HOLD_REPEAT - we only need discrete events
+    return event != SmartButton::Event::HOLD 
+        && event != SmartButton::Event::HOLD_REPEAT
+        && event != SmartButton::Event::LONG_HOLD_REPEAT;
   }
 }
 
@@ -34,21 +46,25 @@ void ButtonManager::begin() {
 
   // Setup callbacks using ButtonContext to identify which button fired
   _leftButton->begin([](SmartButton* button, SmartButton::Event event, int clickCount) {
+    if (!shouldForwardEvent(event)) return;
     auto* context = static_cast<ButtonContext*>(button->getContext());
     context->self->onRawEvent(context->id, mapEvent(event), clickCount);
   }, &_leftContext);
   
   _downButton->begin([](SmartButton* button, SmartButton::Event event, int clickCount) {
+    if (!shouldForwardEvent(event)) return;
     auto* context = static_cast<ButtonContext*>(button->getContext());
     context->self->onRawEvent(context->id, mapEvent(event), clickCount);
   }, &_downContext);
   
   _upButton->begin([](SmartButton* button, SmartButton::Event event, int clickCount) {
+    if (!shouldForwardEvent(event)) return;
     auto* context = static_cast<ButtonContext*>(button->getContext());
     context->self->onRawEvent(context->id, mapEvent(event), clickCount);
   }, &_upContext);
   
   _rightButton->begin([](SmartButton* button, SmartButton::Event event, int clickCount) {
+    if (!shouldForwardEvent(event)) return;
     auto* context = static_cast<ButtonContext*>(button->getContext());
     context->self->onRawEvent(context->id, mapEvent(event), clickCount);
   }, &_rightContext);

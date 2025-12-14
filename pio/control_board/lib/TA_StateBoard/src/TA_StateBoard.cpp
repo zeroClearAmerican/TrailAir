@@ -98,7 +98,8 @@ void StateBoard::buildDisplayModel(trailair::display::DisplayModel& m,
   if (controller.getState() == trailair::controller::ControllerState::Error) {
     m.viewType = trailair::display::ViewType::Error;
   }
-  // If controller is actively seeking but UI doesn't know it (remote command), show seeking
+  // If controller is actively working but UI is in Idle (remote-initiated seek), show seeking
+  // But don't override if UI is in Manual mode - manual operations should show Manual view
   else if ((controller.getState() == trailair::controller::ControllerState::AirUp ||
             controller.getState() == trailair::controller::ControllerState::Venting ||
             controller.getState() == trailair::controller::ControllerState::Checking) &&
@@ -106,7 +107,7 @@ void StateBoard::buildDisplayModel(trailair::display::DisplayModel& m,
     // Controller is active but UI thinks we're idle - must be remote-initiated seeking
     m.viewType = trailair::display::ViewType::Seeking;
   }
-  // Normal UI state mapping
+  // Normal UI state mapping - respect whatever view the UI state machine is in
   else {
     switch (uiView) {
       case trailair::ui::ViewState::Idle:         m.viewType = trailair::display::ViewType::Idle; break;
