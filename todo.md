@@ -1,3 +1,9 @@
-[ ] clean up md files
-[ ] migrate from Arduino to ESP-IDF
-[ ] Fix control board UI issues
+# TrailAir TODO
+
+## Immediate
+
+- [ ] Fix: Remote sleep triggers Manual mode on control board
+
+## Future
+
+- [ ] Migrate from Arduino framework to ESP-IDF
