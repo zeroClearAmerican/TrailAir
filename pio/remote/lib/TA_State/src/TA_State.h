@@ -1,78 +1,54 @@
 #pragma once
 #include <stdint.h>
+#include <TA_Types.h>
 #include <TA_Protocol.h>
 
-// Forward declarations
 namespace trailair { namespace display { struct DisplayModel; } }
-namespace trailair { namespace input { struct ButtonEvent; } }
-namespace trailair { namespace comms { class EspNowLink; enum class PairEvent; } }
+namespace trailair { namespace comms { class RemoteLink; enum class PairEvent; } }
 
-namespace trailair { namespace state {
+namespace trailair {
+namespace state {
 
 /**
- * @brief Thin client state controller - remote as wireless input/display device
- * 
- * This controller does NOT run its own UI state machine. Instead:
- * - Buttons are forwarded directly to the board
- * - Display shows exactly what the board reports
- * - Only remote-specific logic lives here (battery, sleep, pairing)
+ * @brief Remote as a thin client: buttons go to the board, the screen shows the board's status.
+ *
+ * Only remote-specific behavior lives here: sleep (Left long-hold), pairing (Right click while
+ * disconnected), battery, and renewing manual holds (re-sending ButtonPress while Up/Down is
+ * held, which the board treats as a lease renewal).
  */
 class StateController {
 public:
-  explicit StateController(trailair::comms::EspNowLink& link);
+  explicit StateController(trailair::comms::RemoteLink& link) : link_(link) {}
 
-  void begin();
-  void update(uint32_t now, bool isConnected, bool isConnecting);
-
-  // Input from board (master state) - board tells us what to display
-  void onStatus(const trailair::protocol::Response& msg);
-
-  // Input from local buttons → forward to board (except remote-specific actions)
-  void onButton(const trailair::input::ButtonEvent& e);
-
-  // Remote-specific inputs
+  void update(uint32_t now);
+  void onStatus(const trailair::protocol::Status& status);
+  void onButton(const ButtonEvent& e);
   void onBatteryPercent(int percent);
-  void onPairEvent(trailair::comms::PairEvent ev, const uint8_t mac[6]);
+  void onPairEvent(trailair::comms::PairEvent ev);
 
-  // Sleep request (e.g. from long-hold Left). App should check and execute.
+  /// Left long-hold asked for sleep. The app checks and executes.
   bool takeSleepRequest();
-
-  // Called after waking to reset connection/state visuals
+  /// Clear transient state after waking
   void resetAfterWake();
 
-  // Build display model - shows board's state plus remote overlays
   void buildDisplayModel(trailair::display::DisplayModel& dm) const;
 
-  // Accessors (for debugging/testing)
-  float currentPsi() const { return currentPsi_; }
-  float targetPsi() const { return targetPsi_; }
-  uint8_t lastError() const { return lastErrorCode_; }
-
 private:
-  trailair::comms::EspNowLink& link_;
+  trailair::comms::RemoteLink& link_;
 
-  // Board's state (received via onStatus - board is master)
-  float currentPsi_ = 0.0f;
-  float targetPsi_ = 0.0f;
-  trailair::protocol::UIState boardUIState_ = trailair::protocol::UIState::Idle;
-  trailair::protocol::StatusCode boardControllerStatus_ = trailair::protocol::StatusCode::Idle;
-  uint8_t lastErrorCode_ = 0;
-
-  // Remote-only state
+  trailair::protocol::Status status_{};  ///< Latest from the board (the board is master)
   int batteryPercent_ = 0;
   bool isConnected_ = false;
-  bool isConnecting_ = false;
   bool sleepRequested_ = false;
 
-  // Pairing state
-  bool pairingActive_ = false;
+  // Pairing failure message (Timeout/Busy) shows briefly
   bool pairingFailed_ = false;
   bool pairingBusy_ = false;
-  uint32_t pairingFailHoldUntil_ = 0;  // Show failure message window
+  uint32_t pairingFailHoldUntil_ = 0;
 
-  // Sleep handling
-  uint32_t lastButtonTime_ = 0;
-  bool leftLongHoldSent_ = false;  // Prevent duplicate long-holds
+  // Up/Down held on the board: re-send ButtonPress so the board's manual lease stays renewed
+  uint8_t heldMask_ = 0;
+  uint32_t nextHoldRepeatAt_ = 0;
 };
 
 } // namespace state

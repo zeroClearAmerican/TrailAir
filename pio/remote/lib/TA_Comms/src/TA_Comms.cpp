@@ -1,399 +1,130 @@
 #include "TA_Comms.h"
-#include "TA_Time.h"  // Overflow-safe time utilities
+#include <TA_Time.h>
 
-namespace trailair { namespace comms {
+namespace trailair {
+namespace comms {
 
-        EspNowLink* EspNowLink::s_instance_ = nullptr;
+using trailair::protocol::Frame;
+using trailair::protocol::FrameType;
+using trailair::time::getMilliseconds;
+using trailair::time::isTimeFor;
+using trailair::time::calculateFutureTime;
 
-        static const char* kPrefsNs  = "trailair";
-        static const char* kPrefsKey = "peer";
+namespace {
+  Frame simpleFrame(FrameType type) {
+    Frame f;
+    f.type = type;
+    return f;
+  }
+}
 
-        EspNowLink::EspNowLink() {
-            s_instance_ = this;
-        }
+bool RemoteLink::begin() {
+  pairing_ = false;
+  wasConnected_ = false;
+  if (!Link::begin()) return false;
+  restartPings_(getMilliseconds());
+  return true;
+}
 
-        bool EspNowLink::begin(const uint8_t peerMac[6]) {
-            WiFi.mode(WIFI_STA);
-            WiFi.disconnect();
+void RemoteLink::end() {
+  pairing_ = false;
+  Link::end();
+}
 
-            if (esp_now_init() != ESP_OK) {
-        #if TA_COMMS_DEBUG
-                Serial.println("ESP-NOW init failed");
-        #endif
-                return false;
-            }
+void RemoteLink::restartPings_(uint32_t now) {
+  pingBackoff_ = cfg_.pingBackoffStartMilliseconds;
+  nextPingAt_ = now;  // ping immediately
+}
 
-            esp_now_register_recv_cb(&EspNowLink::onRecvStatic);
-            esp_now_register_send_cb(&EspNowLink::onSentStatic);
+bool RemoteLink::sendButton(ButtonAction action, ButtonId button) {
+  Frame f;
+  f.type = trailair::protocol::buttonFrameType(action);
+  f.button = button;
+  return sendToPeer(f);
+}
 
-            inited_ = true;
-            isConnected_ = false;
-            isConnecting_ = false;
-            lastSeenMs_ = 0;
-            pingBackoffMs_ = 200;
-            nextPingAtMs_ = 0;
+void RemoteLink::service() {
+  poll();
+  uint32_t now = getMilliseconds();
 
-            // Try persisted peer first
-            loadPeerFromNVS();
+  if (pairing_) {
+    if (busySeen_ && isTimeFor(now, busyGiveUpAt_)) {
+      stopPairing_(PairEvent::Busy);
+    } else if (isTimeFor(now, pairingTimeoutAt_)) {
+      stopPairing_(PairEvent::Timeout);
+    } else if (isTimeFor(now, nextPairRequestAt_)) {
+      broadcast(simpleFrame(FrameType::PairRequest));
+      nextPairRequestAt_ = calculateFutureTime(now, cfg_.pairingRequestIntervalMilliseconds);
+    }
+    return;  // no pings while pairing
+  }
 
-            if (!hasPeer_ && peerMac) {
-                memcpy(peer_, peerMac, 6);
-                hasPeer_ = true;
-            }
+  if (!hasPeer() || !isReady()) return;
 
-            if (hasPeer_) {
-                if (!ensurePeer_()) {
-        #if TA_COMMS_DEBUG
-                    Serial.println("Failed to add peer");
-        #endif
-                    return false;
-                }
-        #if TA_COMMS_DEBUG
-                Serial.printf("ESP-NOW peer ready %02X:%02X:%02X:%02X:%02X:%02X\n",
-                    peer_[0],peer_[1],peer_[2],peer_[3],peer_[4],peer_[5]);
-        #endif
-            }
+  bool connected = isConnected();
+  if (connected != wasConnected_) {
+    wasConnected_ = connected;
+    if (connected) nextPingAt_ = calculateFutureTime(now, cfg_.keepAliveIntervalMilliseconds);
+    else restartPings_(now);  // lost link: fall back to fast reconnect pings
+  }
 
-        #if TA_COMMS_DEBUG
-            Serial.println("ESP-NOW initialized");
-        #endif
-            return true;
-        }
+  if (isTimeFor(now, nextPingAt_)) {
+    sendToPeer(simpleFrame(FrameType::Ping));
+    if (connected) {
+      nextPingAt_ = calculateFutureTime(now, cfg_.keepAliveIntervalMilliseconds);
+    } else {
+      nextPingAt_ = calculateFutureTime(now, pingBackoff_);
+      pingBackoff_ = min(pingBackoff_ * 2, cfg_.pingBackoffMaximumMilliseconds);
+    }
+  }
+}
 
-        bool EspNowLink::ensurePeer_() {
-            if (!hasPeer_) return false;
-            if (esp_now_is_peer_exist(peer_)) return true;
-            esp_now_peer_info_t peerInfo = {};
-            memcpy(peerInfo.peer_addr, peer_, 6);
-            peerInfo.channel = 0;
-            peerInfo.encrypt = false;
-            return esp_now_add_peer(&peerInfo) == ESP_OK;
-        }
+void RemoteLink::onFrame_(const uint8_t mac[6], const Frame& f) {
+  switch (f.type) {
+    case FrameType::Status:
+      if (isPeer(mac) && statusCb_) statusCb_(statusCtx_, f.status);  // only our board's status counts
+      break;
 
-        bool EspNowLink::sendRaw_(const uint8_t payload[trailair::protocol::PAYLOAD_LENGTH]) {
-            if (!inited_) return false;
-            if (!ensurePeer_()) return false;
-            return esp_now_send(peer_, payload, trailair::protocol::PAYLOAD_LENGTH) == ESP_OK;
-        }
+    case FrameType::PairAck:
+      if (!pairing_) break;
+      setPeer(mac);  // replaces any previous board, so it can't keep feeding us status
+      wasConnected_ = false;
+      restartPings_(getMilliseconds());
+      stopPairing_(PairEvent::Acked);
+      break;
 
-        bool EspNowLink::sendStart(float targetPsi) {
-            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
-            trailair::protocol::Request r; r.kind = trailair::protocol::Request::Kind::Start; r.targetPSI = targetPsi;
-            trailair::protocol::packRequest(p, r);
-            return sendRaw_(p);
-        }
-        bool EspNowLink::sendCancel() {
-            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
-            trailair::protocol::Request r; r.kind = trailair::protocol::Request::Kind::Idle;
-            trailair::protocol::packRequest(p, r);
-            return sendRaw_(p);
-        }
-        bool EspNowLink::sendManual(uint8_t code) {
-            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
-            trailair::protocol::Request r; r.kind = trailair::protocol::Request::Kind::Manual; r.manualMode = static_cast<trailair::protocol::ManualMode>(code);
-            trailair::protocol::packRequest(p, r);
-            return sendRaw_(p);
-        }
-        bool EspNowLink::sendPing(float targetPsi) {
-            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
-            trailair::protocol::Request r; 
-            r.kind = trailair::protocol::Request::Kind::Ping;
-            r.targetPSI = targetPsi;
-            trailair::protocol::packRequest(p, r);
-            return sendRaw_(p);
-        }
-        
-        // New button-based API (thin client protocol)
-        bool EspNowLink::sendButtonPress(trailair::protocol::ButtonId button) {
-            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
-            trailair::protocol::Request r;
-            r.kind = trailair::protocol::Request::Kind::ButtonPress;
-            r.button = button;
-            trailair::protocol::packRequest(p, r);
-            return sendRaw_(p);
-        }
-        
-        bool EspNowLink::sendButtonRelease(trailair::protocol::ButtonId button) {
-            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
-            trailair::protocol::Request r;
-            r.kind = trailair::protocol::Request::Kind::ButtonRelease;
-            r.button = button;
-            trailair::protocol::packRequest(p, r);
-            return sendRaw_(p);
-        }
-        
-        bool EspNowLink::sendButtonClick(trailair::protocol::ButtonId button) {
-            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
-            trailair::protocol::Request r;
-            r.kind = trailair::protocol::Request::Kind::ButtonClick;
-            r.button = button;
-            trailair::protocol::packRequest(p, r);
-            return sendRaw_(p);
-        }
-        
-        bool EspNowLink::sendButtonLongHold(trailair::protocol::ButtonId button) {
-            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
-            trailair::protocol::Request r;
-            r.kind = trailair::protocol::Request::Kind::ButtonLongHold;
-            r.button = button;
-            trailair::protocol::packRequest(p, r);
-            return sendRaw_(p);
-        }
+    case FrameType::PairBusy:
+      // A nearby board paired to someone else. Keep asking briefly in case a free board answers.
+      if (pairing_ && !busySeen_) {
+        busySeen_ = true;
+        busyGiveUpAt_ = calculateFutureTime(getMilliseconds(), cfg_.pairingBusyGraceMilliseconds);
+      }
+      break;
 
-        void EspNowLink::requestReconnect() {
-            if (isConnected_) return;
-            isConnecting_ = true;
-            nextPingAtMs_ = 0; // send immediately
-        }
+    default:
+      break;  // board-bound frames
+  }
+}
 
-        // Emit helper
-        void EspNowLink::emitPairEvent_(PairEvent ev, const uint8_t mac[6]) {
-            #if TA_COMMS_DEBUG
-            const char* n = "";
-            switch (ev) {
-                case PairEvent::Started: n="Started"; break;
-                case PairEvent::Acked: n="Acked"; break;
-                case PairEvent::Timeout: n="Timeout"; break;
-                case PairEvent::Canceled: n="Canceled"; break;
-                case PairEvent::Busy: n="Busy"; break;
-                case PairEvent::Saved: n="Saved"; break;
-                case PairEvent::Cleared: n="Cleared"; break;
-            }
-            Serial.printf("[PAIR] %s\n", n);
-            #endif
-            if (pairCb_) pairCb_(pairCtx_, ev, mac);
-        }
+bool RemoteLink::startPairing() {
+  if (pairing_ || !isReady()) return false;
+  uint32_t now = getMilliseconds();
+  pairing_ = true;
+  busySeen_ = false;
+  pairingTimeoutAt_ = calculateFutureTime(now, cfg_.pairingTimeoutMilliseconds);
+  nextPairRequestAt_ = now;
+  if (pairCb_) pairCb_(pairCtx_, PairEvent::Started);
+  return true;
+}
 
-        bool EspNowLink::loadPeerFromNVS() {
-            if (!prefs_.begin(kPrefsNs, true)) return false;
-            size_t len = prefs_.getBytesLength(kPrefsKey);
-            if (len == 6) {
-                uint8_t mac[6];
-                prefs_.getBytes(kPrefsKey, mac, 6);
-                prefs_.end();
-                if (esp_now_is_peer_exist(mac)) {
-                memcpy(peer_, mac, 6);
-                hasPeer_ = true;
-                return true;
-                }
-                // (re)add peer
-                esp_now_peer_info_t pi = {};
-                memcpy(pi.peer_addr, mac, 6);
-                pi.channel = 0;
-                pi.encrypt = false;
-                if (esp_now_add_peer(&pi) == ESP_OK) {
-                memcpy(peer_, mac, 6);
-                hasPeer_ = true;
-                return true;
-                }
-            } else {
-                prefs_.end();
-            }
-            return false;
-        }
+void RemoteLink::cancelPairing() {
+  if (pairing_) stopPairing_(PairEvent::Canceled);
+}
 
-        bool EspNowLink::savePeerToNVS(const uint8_t mac[6]) {
-            if (!mac) return false;
-            if (!prefs_.begin(kPrefsNs, false)) return false;
-            bool ok = prefs_.putBytes(kPrefsKey, mac, 6) == 6;
-            prefs_.end();
-            if (ok) {
-                hasPeer_ = true;
-                memcpy(peer_, mac, 6);
-                emitPairEvent_(PairEvent::Saved, mac);
-            }
-            return ok;
-        }
+void RemoteLink::stopPairing_(PairEvent ev) {
+  pairing_ = false;
+  if (pairCb_) pairCb_(pairCtx_, ev);
+}
 
-        bool EspNowLink::clearPeerFromNVS() {
-            if (!prefs_.begin(kPrefsNs, false)) return false;
-            bool ok = prefs_.remove(kPrefsKey);
-            prefs_.end();
-            if (ok) {
-                if (hasPeer_) {
-                    esp_now_del_peer(peer_);
-                }
-                hasPeer_ = false;
-                uint8_t zero[6] = {0};
-                emitPairEvent_(PairEvent::Cleared, zero);
-            }
-            return ok;
-        }
-
-        void EspNowLink::ensureBroadcastPeer_() {
-            uint8_t bcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
-            if (!esp_now_is_peer_exist(bcast)) {
-                esp_now_peer_info_t pi = {};
-                memcpy(pi.peer_addr, bcast, 6);
-                pi.channel = 0;
-                pi.encrypt = false;
-                esp_now_add_peer(&pi);
-            }
-        }
-
-        bool EspNowLink::startPairing(uint8_t groupId, uint32_t timeoutMs) {
-            if (pairing_) return false;
-            pairing_ = true;
-            pairingGroupId_ = groupId;
-            pairingTimeoutAt_ = trailair::time::calculateFutureTime(trailair::time::getMilliseconds(), timeoutMs);
-            nextPairReqAt_ = 0;
-            pairReqIntervalMs_ = 500;
-            ensureBroadcastPeer_();
-            emitPairEvent_(PairEvent::Started, peer_);
-            return true;
-        }
-
-        void EspNowLink::cancelPairing() {
-            if (!pairing_) return;
-            pairing_ = false;
-            emitPairEvent_(PairEvent::Canceled, peer_);
-        }
-
-        void EspNowLink::stopPairing_(PairEvent finalEv, const uint8_t* mac) {
-            pairing_ = false;
-            emitPairEvent_(finalEv, mac ? mac : peer_);
-        }
-
-        bool EspNowLink::sendPairReq_() {
-            uint8_t p[trailair::protocol::PAYLOAD_LENGTH];
-            trailair::protocol::packPairingRequest(p, pairingGroupId_);
-            uint8_t bcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
-            return esp_now_send(bcast, p, trailair::protocol::PAYLOAD_LENGTH) == ESP_OK;
-        }
-
-        void EspNowLink::handlePairFrame_(const uint8_t* mac, const trailair::protocol::PairingMessage& pm) {
-            using namespace trailair::protocol;
-            if (!pairing_) return;
-
-            switch (pm.operation) {
-                case PairingOperation::Acknowledge:
-                    if (pm.value == pairingGroupId_) {
-                        stopPairing_(PairEvent::Acked, mac);   // Acked first
-                        
-                        // If we're switching to a new peer MAC, remove the old one first
-                        if (hasPeer_ && memcmp(peer_, mac, 6) != 0) {
-                            #if TA_COMMS_DEBUG
-                            Serial.printf("[Pairing] Switching from old peer %02X:%02X:%02X:%02X:%02X:%02X to new peer %02X:%02X:%02X:%02X:%02X:%02X\n",
-                                peer_[0], peer_[1], peer_[2], peer_[3], peer_[4], peer_[5],
-                                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-                            #endif
-                            esp_now_del_peer(peer_);
-                        }
-                        
-                        savePeerToNVS(mac);                    // then Saved event
-                        // add peer if needed
-                        if (!esp_now_is_peer_exist(mac)) {
-                            esp_now_peer_info_t pi = {};
-                            memcpy(pi.peer_addr, mac, 6);
-                            pi.channel = 0;
-                            pi.encrypt = false;
-                            esp_now_add_peer(&pi);
-                        }
-                        memcpy(peer_, mac, 6);
-                        hasPeer_ = true;
-                        requestReconnect(); // start normal connection attempts
-                    }
-                    break;
-                case PairingOperation::Busy:
-                    stopPairing_(PairEvent::Busy, mac);
-                    break;
-                default:
-                    break;
-            }
-        }
-
-        void EspNowLink::service() {
-            uint32_t now = trailair::time::getMilliseconds();
-
-            // Skip ping logic while pairing (optional)
-            if (!pairing_) {
-                // Read lastSeenMs_ atomically
-                uint32_t lastSeen;
-                portENTER_CRITICAL(&isrMux_);
-                lastSeen = lastSeenMs_;
-                portEXIT_CRITICAL(&isrMux_);
-
-                // Check for connection timeout
-                if (isConnected_ && trailair::time::hasElapsed(now, lastSeen, connectionTimeoutMs_)) {
-                    isConnected_ = false;
-        #if TA_COMMS_DEBUG
-                    Serial.println("Connection lost.");
-        #endif
-                }
-                
-                // Send periodic pings when connecting OR when connected (to keep alive)
-                if ((isConnecting_ && !isConnected_) || isConnected_) {
-                    if (trailair::time::isTimeFor(now, nextPingAtMs_)) {
-                        sendPing(targetPsi_);  // Include current target PSI in ping
-                        if (isConnected_) {
-                            // When connected, ping every 2 seconds to keep connection alive
-                            nextPingAtMs_ = trailair::time::calculateFutureTime(now, 2000);
-                        } else {
-                            // When connecting, use exponential backoff
-                            nextPingAtMs_ = trailair::time::calculateFutureTime(now, pingBackoffMs_);
-                            pingBackoffMs_ = min(pingBackoffMs_ * 2, pingBackoffMaxMs_);
-                        }
-                    }
-                }
-            }
-
-            if (pairing_) {
-                if (trailair::time::isTimeFor(now, pairingTimeoutAt_)) {
-                    stopPairing_(PairEvent::Timeout, peer_);
-                } else if (trailair::time::isTimeFor(now, nextPairReqAt_)) {
-                    sendPairReq_();
-                    nextPairReqAt_ = trailair::time::calculateFutureTime(now, pairReqIntervalMs_);
-                }
-            }
-        }
-
-        void EspNowLink::onRecvStatic(const uint8_t* mac, const uint8_t* data, int len) {
-            if (s_instance_) s_instance_->onRecv(mac, data, len);
-        }
-        void EspNowLink::onSentStatic(const uint8_t* mac, esp_now_send_status_t status) {
-            if (s_instance_) s_instance_->onSent(mac, status);
-        }
-
-        void EspNowLink::onRecv(const uint8_t* mac, const uint8_t* data, int len) {
-          using namespace trailair::protocol;
-
-          // Pairing frames
-          if (isPairingFrame(data, len)) {
-            PairingMessage pm;
-            if (parsePairingMessage(data, len, pm)) {
-              handlePairFrame_(mac, pm);
-              return;
-            }
-          }
-
-          // Normal status
-          Response sm;
-          if (!parseResponse(data, len, sm)) return;
-
-          // Write lastSeenMs_ atomically
-          portENTER_CRITICAL(&isrMux_);
-          lastSeenMs_ = millis();
-          portEXIT_CRITICAL(&isrMux_);
-
-          // Transition to connected state
-          bool wasConnecting = isConnecting_;
-          isConnected_ = true;
-          isConnecting_ = false;
-          
-          // Reset ping interval to 2 seconds when first connecting
-          if (wasConnecting) {
-              pingBackoffMs_ = 200; // Reset backoff for next disconnect
-              nextPingAtMs_ = trailair::time::calculateFutureTime(millis(), 2000);
-          }
-
-          if (cb_) cb_(cbCtx_, sm);
-        }
-
-        void EspNowLink::onSent(const uint8_t* /*mac*/, esp_now_send_status_t status) {
-            #if TA_COMMS_DEBUG
-            Serial.printf("Last Packet Send Status: %s\n", status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
-            #endif
-        }
-
-    } // namespace comms
-} // namespace ta
+} // namespace comms
+} // namespace trailair

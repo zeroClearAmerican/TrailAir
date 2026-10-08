@@ -8,331 +8,159 @@
 
 TrailAir consists of **two cooperating ESP32-C3 devices** communicating over ESP-NOW:
 
-| Agent                               | Role                                                                                                                          | Typical Hardware                                                               |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| Control Board (`pio/control_board`) | Drives compressor / vent actuators, reads pressure sensor, enforces safety/state logic, reports status & errors               | Pressure sensor (analog), compressor relay / MOSFET, vent valve, optional OLED |
-| Remote (`pio/remote`)               | User interface (buttons + OLED), target PSI selection, manual control streaming, initiates pairing, monitors status & battery | 4 buttons, battery sense divider, OLED                                         |
+| Agent                               | Role                                                                                                                                      | Typical Hardware                                                       |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Control Board (`pio/control_board`) | **Master.** Runs the UI state machine and pressure controller, drives compressor/vent, reads the sensor. Fully usable on its own buttons. | Pressure sensor (analog, via divider), compressor + vent relays, OLED, 4 buttons |
+| Remote (`pio/remote`)               | **Thin client.** Forwards button events, displays the board's status. Owns only pairing, sleep and battery.                              | 4 buttons, battery sense divider, OLED                                 |
 
-They share a **unified protocol** (fixed two‑byte frames) plus a **shared UI state machine** so user interactions evolve consistently across both devices.
+The board never depends on the remote: every screen and action works from the board's own buttons. Both screens render the same `DisplayModel` through the same code, so they match; the remote only adds its link and battery icons and its own Disconnected/Pairing screens.
 
 ---
 
-## 2. Repository Layout (Relevant Parts)
+## 2. Repository Layout
 
 ```
 TrailAir/
   AGENTS.md (this doc)
-  pio/                # PlatformIO projects (authoritative build roots)
+  pio/                       # PlatformIO projects (build roots)
     control_board/
-      platformio.ini
-      lib/TA_Actuators
-      lib/TA_CommsBoard
-      lib/TA_Sensors
-      lib/TA_StateBoard
-      src/TrailAir-ControlBoard.ino
+      lib/TA_Actuators       # compressor/vent outputs (implements IActuatorOutputs)
+      lib/TA_Sensors         # pressure reading + calibration
+      lib/TA_BoardUI         # board UI state machine (the master UI)
+      lib/TA_CommsBoard      # BoardLink: pair accept/busy, status, remote frames
+      lib/TA_App             # board orchestrator / main loop
+      test/test_seek         # controller vs. simulated tire (native)
     remote/
-      platformio.ini
-      lib/TA_Comms
-      lib/TA_State
+      lib/TA_Comms           # RemoteLink: connection, reconnect pings, pairing
+      lib/TA_State           # remote thin-client state
       lib/TA_Battery
-      src/TrailAir-Remote.ino
-  pioLib/             # Shared libraries (UI, protocol, controller, display, input, config, errors, app orchestrators)
-    TA_App/
-    TA_Config/
-    TA_Controller/
-    TA_Display/
-    TA_Errors/
-    TA_Input/
-    TA_Protocol/
-    TA_UI/
-    SmartButton/
+      lib/TA_RemoteApp       # remote orchestrator / main loop / sleep
+  pioLib/                    # shared libraries
+    TA_Types/                # shared enums: ButtonId/Action/Event, ControllerState, View
+    TA_Protocol/             # wire format v2
+    TA_Link/                 # shared ESP-NOW core (radio, peer, NVS, rx queue)
+    TA_Controller/           # pressure controller (pure logic, testable)
+    TA_Display/              # SSD1306 rendering
+    TA_Input/ SmartButton/   # debounced buttons
+    TA_Config/ TA_Errors/ TA_Time/
 ```
-
-> Note: There are duplicate root-level project folders (legacy) mirroring `pio/*`. Focus on the `pio/` versions for active development/build.
 
 ---
 
 ## 3. Build & Run
 
-### Prerequisites
-
-- VS Code + PlatformIO extension (or CLI)
-- Board: Seeed XIAO ESP32C3 (configured in `platformio.ini`)
-
-### Build (VS Code Tasks)
-
-Use the tasks you created (or create) named e.g.:
-
-- `PIO: Build Remote`
-- `PIO: Build Control Board`
-
-### Build (CLI)
-
-From the agent folder:
-
 ```
-# Remote
 platformio run -d pio/remote
-# Control Board
 platformio run -d pio/control_board
 ```
 
-Upload with `platformio run -t upload -d <dir>` and open serial monitor with `platformio device monitor -b 115200`.
+Upload with `platformio run -t upload -d <dir>`, monitor with `platformio device monitor -b 115200`.
+
+Native unit tests (also run by CI): `platformio test -e native_test` from either project folder. Hardware libraries (anything using Arduino, ESP-NOW or the SSD1306) are `lib_ignore`d in `native_test`; keep logic that needs testing out of them.
+
+**Flash both devices together** whenever `TA_Protocol` changes (frames carry a version byte; mismatched firmware ignores each other).
 
 ---
 
 ## 4. Shared Core Modules
 
-### 4.1 `TA_Config`
+### 4.1 `TA_Types`
 
-Defines plain structs holding default configuration values used across agents:
+The single definition of `ButtonId`, `ButtonAction`, `ButtonEvent`, `ControllerState` and `View`. Enums that go over the air use their wire character as their value (`ControllerState::AirUp = 'U'`), so encoding is a cast. Don't add parallel enums in other modules.
 
-- `UiShared`: min/max PSI range, default target, step size, post-seek "done" hold, error auto-clear window.
-- `LinkShared`: link timeouts, manual resend cadence, pairing parameters.
-  Remote state uses **pointers** to these (allowing injection / test overrides while keeping headers light).
+`View` is the screen: `Idle, Manual, Seeking, Done, Error` are owned by the board and sent to the remote; `Disconnected, Pairing` are remote-side only.
 
-### 4.2 `TA_Protocol`
+### 4.2 `TA_Protocol` (wire format v2)
 
-Super-lean, allocation‑free, 2‑byte messages:
+Every frame is `[MAGIC, type, payload...]`, fixed length per type, validated by `parse()`:
 
-- **Status → Remote**: first byte is an ASCII letter (`Idle='I'`, `AirUp='U'`, `Venting='V'`, `Checking='C'`, `Error='E'`). Second byte is either packed PSI (0.5 PSI resolution) or error code.
-- **Request → Board**: first byte (`Start='S'`, `Idle='I'`, `Manual='M'`, `Ping='P'`). Second byte is packed target PSI, manual code (`0x00 vent` / `0xFF air`), or unused.
-- **Pairing Frames**: `PairOp` letters (`Req='R'`, `Ack='A'`, `Busy='B'`) sharing the same framing space.
-- Helpers: `psiToByte05(float)`, `byteToPsi05(uint8_t)`; typed `Request` & `Response` structs.
+| Direction      | Frame                                   | Bytes                                      |
+| -------------- | --------------------------------------- | ------------------------------------------ |
+| Remote → board | ButtonPress/Release/Click/LongHold `D U C L` | `[M, t, buttonId]`                     |
+| Remote → board | Ping `P`, PairRequest `R` (broadcast)   | `[M, t]`                                   |
+| Board → remote | Status `S`                              | `[M, 'S', state, view, psi, target, err]`  |
+| Board → remote | PairAck `A`, PairBusy `B` (broadcast)   | `[M, t]`                                   |
 
-### 4.3 `TA_UI`
+PSI bytes are 0.5 PSI units. Bump `MAGIC` on incompatible changes. The board rounds PSI to whole numbers before sending, so the remote shows exactly the board's number.
 
-Device-agnostic UI state machine encapsulating _view logic_ and _target PSI adjustments_:
-Views: `Idle`, `Manual`, `Seeking`, `Error`, `Disconnected`, `Pairing`.
+### 4.3 `TA_Link`
 
-- Inputs via `ButtonEvent` (Button + Action).
-- Device actions abstracted by `DeviceActions` (start seek, manual vent/air, cancel, clear error).
-- Maintains _done hold_ after a successful seek, Auto-clears error after configured window through `DeviceActions::clearError`.
-- The remote injects connectivity (may switch to `Disconnected`). Control board always appears connected internally.
+ESP-NOW plumbing shared by both devices: radio up/down, the one paired peer (registered with ESP-NOW, persisted in NVS), frame validation, and a receive queue. The ESP-NOW callback runs on the WiFi task and only enqueues; `poll()` dispatches to the derived class's `onFrame_()` on the main loop, so all role logic is single-threaded. `RemoteLink` and `BoardLink` derive from it and add only their role.
 
-### 4.4 `TA_Display`
+### 4.4 `TA_Controller`
 
-Rendering facade for Adafruit SSD1306; decoupled via a `DisplayModel` struct (pure data). Includes layout helpers (two-column values, centered text) and battery/link/status/error/pairing icon logic.
+Pressure seek + manual control, pure logic with time passed in (no `millis()`), driving an `IActuatorOutputs`.
 
-### 4.5 `TA_Controller`
+- **Seek:** probe bursts learn inflate/vent rates, then predicted runs aim just short of target, with settle/check pauses. Decisions use **settled** readings only (while air flows the sensor reads the hose, not the tire); live readings only enforce the max-PSI cap. Probes are sized so even `maximumExpectedRatePSIPerSecond` can't overshoot. Stalls → `NoChange`, impossible seeks → `ExcessiveTime`.
+- **Manual lease:** `manualAirUp/manualVent(true, now)` start or renew a lease of `manualLeaseMilliseconds`. Callers renew while the button is held (board buttons each loop via `BoardUI::update`; the remote by repeating ButtonPress every `manualRepeatIntervalMilliseconds`). If renewals stop — a lost release, a dead remote — the controller stops itself. Manual air also stops with `OverPressure` at `maximumPSI`.
+- `ControllerConfig` holds the tuning and the **only** pressure limits; the UI reads them via `getConfig()`.
 
-Control Board _pressure regulation_ state machine:
-States: `IDLE`, `AIRUP`, `VENTING`, `CHECKING`, `ERROR`.
+### 4.5 `TA_Display`
 
-- Accepts `startSeek(targetPsi)`, `manualVent(on)`, `manualAirUp(on)`, `cancel()`, `clearError()`.
-- Uses `IOutputs` abstraction; default `ActuatorAdapter` wraps `TA_Actuators` (compressor, vent).
-- Tracks run phases (bursts + settling), checks progress vs tolerance & timeouts, escalates to error codes (`TA_Errors`).
+Renders a `DisplayModel` (plain data). Redraws only when something visible changes (a full redraw is ~13 ms of blocking I2C). No heap use per frame.
 
-### 4.6 `TA_Errors`
+### 4.6 `TA_Input` + `SmartButton`
 
-Central error catalog mapping numeric codes to short display strings. Controller’s internal `ErrorCode` enumerants map directly to catalog constants for wire/display consistency.
+Debounced `Pressed/Released/Click/LongHold` events; `isHeld()` for the physical state. `Click.clickCount` > 1 means rapid taps were merged — Up/Down treat each as a step; Left/Right ignore the count so a double tap can't toggle a mode twice.
 
-### 4.7 `TA_Input` + `SmartButton`
+### 4.7 `TA_Config`, `TA_Errors`, `TA_Time`
 
-Button abstraction producing debounced semantic events: `Pressed`, `Released`, `Click`, `LongHold` through a lightweight event bus (`subscribe` / `unsubscribe`). It wraps `SmartButton` instances but removes global singletons by attaching context to callbacks.
-
-### 4.8 `TA_App` / `TA_RemoteApp`
-
-Orchestrators that wire subsystems together:
-
-- **App (Board)**: Initializes actuators, sensors, controller, comms (`BoardLink`), UI state (`StateBoard`), display.
-- **RemoteApp**: Initializes battery monitor, buttons, comms (`EspNowLink`), remote state (`StateController`), display, sleep/wakeup logic.
-  They contain the main loops for each device’s sketch.
-
-### 4.9 `TA_State` (Remote)
-
-`StateController` integrates:
-
-- UI state machine (shared)
-- Link status + pairing flow
-- Manual streaming resend cadence (`manualRepeatMs`)
-- Sleep request detection (Left long-hold)
-- Battery/error/current PSI aggregation for display
-  Transitions remote-specific states (`DISCONNECTED`, `PAIRING`, etc.) and synchronizes them with UI `View`.
-
-### 4.10 `TA_StateBoard` (Board)
-
-Simplified wrapper to adapt controller state + board link to the shared UI machine (mirrors remote’s visual logic but excludes remote-specific pairing shortcuts). Builds a `DisplayModel` for on-board display if present.
-
-### 4.11 `TA_Comms` (Remote) / `TA_CommsBoard` (Board)
-
-ESP-NOW wrappers:
-
-- **Remote (`EspNowLink`)**: Peer persistence (NVS), connection attempt / ping backoff, pairing initiation (group ID), status callback & pair event callback registration, request send helpers (`sendStart`, `sendManual`, `sendCancel`, `sendPing`).
-- **Board (`BoardLink`)**: Receives requests, sends periodic `Status` or `Error`, persists single peer, responds to pairing requests with `Ack` or `Busy`, exposes `isRemoteActive(timeout)`.
-  Both sides keep packet payload fixed-size (2 bytes) and wrap encoding/decoding with typed structs.
-
-### 4.12 `TA_Actuators`
-
-Thin façade around hardware control (set compressor, vent). Exposed to controller via `ActuatorAdapter` implementing `IOutputs`.
-
-### 4.13 `TA_Sensors` / `PressureFilter`
-
-Reads analog sensor → converts mV to PSI, applies rolling average / smoothing, noise threshold to zero out low noise. Supplies filtered PSI to the controller.
-
-### 4.14 `TA_Battery`
-
-Remote-only battery monitor:
-
-- Rolling average & deadband
-- Divider ratio scaling
-- Percent computation with configurable voltage curve (vEmpty / vFull / low threshold)
-  Feeds display via `StateController::buildDisplayModel`.
+UI timing and link timing defaults; the error catalog (codes travel in the status frame's `err` byte); overflow-safe time helpers.
 
 ---
 
-## 5. Pairing Flow Summary
+## 5. Board
 
-1. Remote enters pairing (user Right click while disconnected) → `startPairing(groupId, timeoutMs)`.
-2. Remote periodically transmits `PairOp::Req (R, groupId)`. Board responds:
-   - If free: saves remote MAC, persists to NVS, replies `Ack (A)` and future status frames use peer.
-   - If already paired (different MAC): replies `Busy (B)`.
-3. Remote handles `Ack` (sets peer + reconnect) or `Busy` (shows busy/failure transient). Timeout auto-cancels.
-4. Remote manual reconnect attempt occurs if user Right clicks while disconnected and pairing not desired.
+- **`TA_BoardUI`** — the master UI. Screens and buttons:
+  - Idle/Done: Left = Manual, Right = seek, Up/Down = target. Done shows "Done!" briefly after a seek, then Idle.
+  - Manual: hold Up = air, hold Down = vent, Left = back.
+  - Seeking: Right = cancel.
+  - Error: Right = acknowledge (auto-clears after `errorAutoClearDurationMilliseconds`).
 
----
-
-## 6. Manual Control Streaming
-
-While in _Manual_ view:
-
-- UI toggles vent/compressor via `DeviceActions::manualVent / manualAirUp` → sets `manualSending_` flag.
-- `StateController::update` resends last manual code every `manualRepeatMs` to maintain board action.
-- Leaving manual (error or other view) triggers an immediate cancel.
+  Board and remote buttons both land in `onButton()`. `status()` is what the remote displays.
+- **`TA_App`** loop: buttons → link → sensor → `ui.update` (renews leases) → `controller.update` → `actuators.service` → status → render. Status goes out every 200 ms while the remote is active, and immediately after each remote frame.
+- **`TA_Actuators`** — compressor and vent are mutually exclusive; each stays off ≥500 ms before turning back on (deferred, not dropped).
+- **`TA_Sensors`** — calibration constants (`DIVIDER_GAIN`, `SENSOR_ZERO_V`, `PSI_PER_SENSOR_V`) for the 0.5–4.5 V / 0–150 PSI sensor behind a 3.3k/4.7k divider. Verify against a gauge.
 
 ---
 
-## 7. Error Lifecycle
+## 6. Remote
 
-- Board detects condition (e.g., no pressure change, excessive time) → enters controller `ERROR` state, sends `Status::Error` + code.
-- Remote: `onStatus` updates `cState_`, sets last error code, UI view becomes `Error`.
-- UI _auto-clear_ occurs after configured `errorAutoClearMs` by issuing a `cancel`/`clearError` once.
-- Subsequent recovery status (non-Error) returns view to `Idle`.
-
----
-
-## 8. Display Data Flow
-
-```
-Controller / Sensors / Battery / Link
-        ↓ (status + metrics)
-   StateController / StateBoard
-        ↓ (fills DisplayModel)
-         TA_Display::render()
-        ↓ (Adafruit SSD1306 API)
-             Screen
-```
-
-Separation allows simulation / unit testing of logic without hardware display.
+- **`TA_State`** forwards buttons while connected (releases always), shows the board's status, and re-sends ButtonPress for held Up/Down.
+- **`TA_Comms` (`RemoteLink`)** — connected = heard from the board within `connectionTimeoutMilliseconds`; while paired and disconnected it pings with backoff; keep-alive while connected.
+- **Sleep** — Left long-hold or 5 min without input. Releases any held manual button, turns the radio off, waits for Left to be released (it is the low-level wake source), and swallows the wake press so it never reaches the board. On wake: fresh battery reading, radio back up, reconnect.
+- **Critical battery** forces sleep (radio off) until the battery recovers.
 
 ---
 
-## 9. Coding Guidelines
+## 7. Pairing
 
-### 9.1 Header Hygiene
-
-- Avoid including `Arduino.h` in shared protocol / logic headers; prefer `<stdint.h>` and forward declarations.
-- Use forward declarations for cross-module types in high-fanout headers (`TA_State.h`, `TA_StateBoard.h`).
-
-### 9.2 Extending Protocol
-
-1. Decide if change fits 2-byte frame; keep first byte semantic (command/status/pair op). If not, introduce a _new_ frame kind while maintaining backward compatibility.
-2. Update `TA_Protocol` enums + pack/parse helpers.
-3. Propagate to `EspNowLink` send helpers and `BoardLink` receive switch.
-4. Update `StateController::onStatus` / board `App::onRequest_` as needed.
-5. Adjust UI if user-visible.
-
-### 9.3 Adding an Error Code
-
-- Extend `TA_Errors` enumeration & `shortText` switch.
-- Map controller internal `ErrorCode` to new catalog value.
-- Ensure display or logs reference it via `lastErrorCode`.
-
-### 9.4 UI Changes
-
-- Prefer modifying shared `TA_UI` state logic rather than forking remote/board differences (device-specific overrides happen through `DeviceActions` or pre-filtering button events in state wrappers).
-
-### 9.5 Timing / Config Tweaks
-
-- Add fields to `UiShared` or `LinkShared`—keep defaults sensible.
-- Remote: inject custom config by passing pointers in `StateController::Config` (currently defaulted inside constructor).
-
-### 9.6 Testing Considerations
-
-- Swap `IOutputs` implementation to mock actuator effects.
-- Simulate reception of `Response` frames by calling `StateController::onStatus` directly.
-- Inject synthetic button events to verify UI transitions.
-
-### 9.7 Memory / Real-Time
-
-- All protocol frames fixed at 2 bytes to minimize airtime & latency.
-- Avoid dynamic allocation in hot paths; only a few single allocations (e.g., display wrapper, SmartButtons) occur during `begin`.
+1. Remote: Right click while disconnected → broadcasts PairRequest every 500 ms for up to 10 s. Right click again cancels.
+2. Board: unpaired → pairs with the requester and replies PairAck; paired to that same remote → re-acks; paired to another remote → broadcasts PairBusy.
+3. Remote: on Ack it saves the board and connects. On Busy it keeps asking for 2 s in case a free board answers, then shows "Device Busy". Timeout shows "No Device".
+4. **New or replacement remote:** long-hold Right on the board's own buttons. The board forgets its remote and shows "Pairing" for up to 30 s (Right click closes it).
 
 ---
 
-## 10. Common Extension Scenarios
+## 8. Coding Guidelines
 
-| Goal                       | Where to Touch                                                          |
-| -------------------------- | ----------------------------------------------------------------------- |
-| New UI view/behavior       | `TA_UI` (enum `View`, update logic & rendering in `TA_Display`)         |
-| New controller safety rule | `TA_Controller` (add detection & enterError\_)                          |
-| New manual action type     | `TA_Protocol` (manual code), remote `RemoteActions`, controller mapping |
-| Faster manual stream       | Adjust `LinkShared.manualRepeatMs`                                      |
-| Alternate sensor scaling   | `TA_Sensors::PressureFilter::readPsi()`                                 |
-| Battery percentage curve   | `TA_BatteryMonitor::recomputePercent_()` logic / config                 |
-
----
-
-## 11. Sleep / Power (Remote)
-
-- Long-hold Left triggers `sleepRequested_` within `StateController`.
-- `RemoteApp::loop` checks `state_.takeSleepRequest()` then performs graceful sleep (logo animation, cancel manual, WiFi/ESP-NOW shutdown, light sleep, wake re-init).
-- Inactivity timeout (5 mins) auto-sleeps.
+- Keep shared logic headers free of `Arduino.h` so they build natively (`TA_Types`, `TA_Protocol`, `TA_Controller`, `TA_Config`, `TA_Errors`).
+- New shared vocabulary goes in `TA_Types`, not a module-local enum.
+- **Protocol changes:** edit `FrameType`/`pack`/`parse`, bump `MAGIC`, update `test_protocol`, then `RemoteLink`/`BoardLink::onFrame_`.
+- **New error:** add it to `TA_Errors` (code + short text), raise it with `enterError_()` in the controller. It reaches both screens via the status frame.
+- **UI behavior:** change `TA_BoardUI` only — the remote mirrors it automatically. Keep both screens identical apart from the remote's link/battery icons and Disconnected/Pairing screens.
+- **Seek tuning:** change `ControllerConfig`, run `test_seek`, then verify on a real tire.
+- Avoid heap allocation outside `begin()`.
 
 ---
 
-## 12. Known Simplifications / Future Ideas
+## 9. Troubleshooting
 
-- Board currently hardcodes some config defaults (option to persist target PSI or tuning parameters in NVS).
-- Expand pairing to multi-remote or multi-board scenarios (would require peer list & additional protocol bytes or index mapping).
-- Add CRC / integrity (currently relying on ESP-NOW reliability + short frame length).
-- Extend protocol for richer telemetry (temperature, voltage) — may need a variable-length mode or multiplexed opcodes.
-
----
-
-## 13. Quick Start (Remote Dev Cycle)
-
-1. Wire buttons + OLED per pin defines in `TrailAir-Remote.ino`.
-2. Flash control board first (so it can Ack pairing).
-3. Power remote, open serial monitor, Right click to pair (status shown on OLED).
-4. Adjust target PSI with Up/Down in Idle; Right click to start; Left for manual.
-
----
-
-## 14. Troubleshooting
-
-| Symptom                          | Likely Cause                                  | Action                                                      |
-| -------------------------------- | --------------------------------------------- | ----------------------------------------------------------- |
-| Remote stuck Disconnected        | Peer not paired / lost                        | Right click to reconnect or re-pair                         |
-| Manual stops after a few seconds | Missed repeat due to timing                   | Check `manualRepeatMs` and ensure `update()` runs (< ~50ms) |
-| Error screen persists            | `errorAutoClearMs=0` or new error re-tripping | Validate error code stream / auto-clear setting             |
-| Status PSI frozen                | Sensor noise threshold or board not sending   | Inspect board serial, verify `readPsi()` output             |
-
----
-
-## 15. Glossary
-
-- **Seek**: Automated regulation toward target PSI (AIRUP/VENTING bursts + CHECKING).
-- **Manual Mode**: Direct control streaming (vent or air) until user releases.
-- **Done Hold**: Short visual hold after successful seek completion.
-- **Pairing Busy**: Board already paired with another MAC.
-
----
-
-## 16. License / Ownership
-
-(Insert licensing / attribution details if applicable.)
-
----
-
-Happy hacking! Keep protocol lean, UI unified, and headers light.
+| Symptom                                   | Likely Cause                                     | Action                                                            |
+| ----------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------- |
+| Remote stuck Disconnected                 | Board off/out of range, or paired elsewhere      | It reconnects automatically; else Right click to pair            |
+| Remote shows "Device Busy"                | Board paired to another remote                   | Long-hold Right on the board, then pair again                     |
+| Manual stops after ~1 s                   | Lease not renewed                                | Check remote repeat interval < `manualLeaseMilliseconds`         |
+| Seek ends with "No change"                | Compressor/valve not moving air, or slow manifold | Check plumbing; lower `noChangeThresholdPSI` for multi-tire fills |
+| Readings off vs. gauge                    | Calibration                                      | Adjust `TA_Sensors` constants                                     |
+| Devices ignore each other after flashing  | Protocol version mismatch                        | Flash both                                                        |

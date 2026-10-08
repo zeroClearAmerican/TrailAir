@@ -1,144 +1,68 @@
 #pragma once
-#include <Arduino.h>
-#include <WiFi.h>
-#include <esp_wifi.h>
-#include <esp_now.h>
-#include <Preferences.h>
-#include "TA_Protocol.h"
+#include <TA_Link.h>
+#include <TA_Config.h>
 
-#ifndef TA_COMMS_DEBUG
-#define TA_COMMS_DEBUG 1
-#endif
+namespace trailair {
+namespace comms {
 
-namespace trailair { namespace comms {
+enum class PairEvent { Started, Acked, Timeout, Canceled, Busy };
 
-        enum class PairEvent {
-            Started,
-            Acked,
-            Timeout,
-            Canceled,
-            Busy,
-            Saved,
-            Cleared
-        };
+typedef void (*StatusCallback)(void* ctx, const trailair::protocol::Status& status);
+typedef void (*PairCallback)(void* ctx, PairEvent ev);
 
-        using trailair::protocol::Response;
-        using trailair::protocol::Request;
+/**
+ * @brief Remote side of the link: connection tracking, reconnect pings, pairing.
+ *
+ * Connected = a frame from the paired board within connectionTimeout. While paired but not
+ * connected it pings with backoff (forever: the remote sleeps after inactivity anyway); while
+ * connected it sends a keep-alive. Status frames from the paired board go to the status callback.
+ */
+class RemoteLink : public trailair::link::Link {
+public:
+  /// Radio up (also after sleep); starts reconnecting if paired
+  bool begin();
+  /// Radio down before sleep (cancels pairing)
+  void end();
+  /// Call every loop
+  void service();
 
-        typedef void (*StatusCallback)(void* ctx, const Response& msg);
-        typedef void (*PairCallback)(void* ctx, PairEvent ev, const uint8_t mac[6]);
+  bool sendButton(ButtonAction action, ButtonId button);
 
-        class EspNowLink {
-            public:
-                EspNowLink();
+  bool isConnected() const { return heardFromPeerWithin(cfg_.connectionTimeoutMilliseconds); }
 
-                // Setup WIFI STA, init ESP-NOW, register peer and callbacks
-                bool begin(const uint8_t peerMac[6]);
+  bool startPairing();
+  void cancelPairing();
+  bool isPairing() const { return pairing_; }
 
-                // Send commands
-                // New button-based API (thin client protocol)
-                bool sendButtonPress(trailair::protocol::ButtonId button);
-                bool sendButtonRelease(trailair::protocol::ButtonId button);
-                bool sendButtonClick(trailair::protocol::ButtonId button);
-                bool sendButtonLongHold(trailair::protocol::ButtonId button);
-                
-                // Legacy high-level commands (deprecated, for backward compatibility)
-                bool sendStart(float targetPsi);
-                bool sendCancel();
-                bool sendManual(uint8_t code);
-                bool sendPing(float targetPsi = 0.0f);
+  void setStatusCallback(StatusCallback cb, void* ctx) { statusCb_ = cb; statusCtx_ = ctx; }
+  void setPairCallback(PairCallback cb, void* ctx) { pairCb_ = cb; pairCtx_ = ctx; }
 
-                // Reconnect ping logic with backoff (call service() in loop)
-                void requestReconnect();
-                void service();
-                void setTargetPsi(float psi) { targetPsi_ = psi; }  // Update target PSI for ping messages
+protected:
+  void onFrame_(const uint8_t mac[6], const trailair::protocol::Frame& f) override;
 
-                // Connection state (derived from lastSeen + timeout)
-                void setConnectionTimeoutMs(uint32_t ms) { connectionTimeoutMs_ = ms; }
-                void setPingBackoffStartMs(uint32_t ms) { pingBackoffMs_ = ms; }
-                void setPairReqIntervalMs(uint32_t ms) { pairReqIntervalMs_ = ms; }
-                bool isConnected() const { return isConnected_; }
-                bool isConnecting() const { return isConnecting_; }
-                uint32_t lastSeenMs() const { 
-                    uint32_t val;
-                    portENTER_CRITICAL(&isrMux_);
-                    val = lastSeenMs_;
-                    portEXIT_CRITICAL(&isrMux_);
-                    return val;
-                }
+private:
+  void stopPairing_(PairEvent ev);
+  void restartPings_(uint32_t now);
 
-                // App callback when a valid status packet arrives
-                void setStatusCallback(StatusCallback cb, void* ctx) {
-                    cb_ = cb; cbCtx_ = ctx;
-                }
+  const trailair::config::CommunicationConfiguration cfg_{};
 
-                // Persistence
-                bool loadPeerFromNVS();
-                bool savePeerToNVS(const uint8_t mac[6]);
-                bool clearPeerFromNVS();
-                bool hasPeer() const { return hasPeer_; }
+  // Pings
+  bool wasConnected_ = false;
+  uint32_t nextPingAt_ = 0;
+  uint32_t pingBackoff_ = 0;
 
-                // Pairing
-                bool startPairing(uint8_t groupId, uint32_t timeoutMs);
-                void cancelPairing();
-                bool isPairing() const { return pairing_; }
-                void setPairCallback(PairCallback cb, void* ctx) { pairCb_ = cb; pairCtx_ = ctx; }
+  // Pairing
+  bool pairing_ = false;
+  uint32_t pairingTimeoutAt_ = 0;
+  uint32_t nextPairRequestAt_ = 0;
+  bool busySeen_ = false;
+  uint32_t busyGiveUpAt_ = 0;
 
-            private:
-                // esp-now callbacks (static trampolines)
-                static void onRecvStatic(const uint8_t* mac, const uint8_t* data, int len);
-                static void onSentStatic(const uint8_t* mac, esp_now_send_status_t status);
-                void onRecv(const uint8_t* mac, const uint8_t* data, int len);
-                void onSent(const uint8_t* mac, esp_now_send_status_t status);
+  StatusCallback statusCb_ = nullptr;
+  void* statusCtx_ = nullptr;
+  PairCallback pairCb_ = nullptr;
+  void* pairCtx_ = nullptr;
+};
 
-                bool ensurePeer_();
-                bool sendRaw_(const uint8_t payload[trailair::protocol::PAYLOAD_LENGTH]);
-
-                void emitPairEvent_(PairEvent ev, const uint8_t mac[6]);
-
-                void handlePairFrame_(const uint8_t* mac, const trailair::protocol::PairingMessage& pm);
-                void stopPairing_(PairEvent finalEv, const uint8_t* mac);
-
-                bool sendPairReq_();
-                void ensureBroadcastPeer_();
-
-            private:
-                static EspNowLink* s_instance_;
-
-                uint8_t peer_[6] = {0};
-                bool inited_ = false;
-
-                // Connection tracking
-                volatile uint32_t lastSeenMs_ = 0;
-                portMUX_TYPE isrMux_ = portMUX_INITIALIZER_UNLOCKED; // Mutex for ISR safety
-                uint32_t connectionTimeoutMs_ = 5000; // ms
-                bool isConnected_ = false;
-                bool isConnecting_ = false;
-
-                // Reconnect backoff
-                uint32_t nextPingAtMs_ = 0;
-                uint32_t pingBackoffMs_ = 200;
-                const uint32_t pingBackoffMaxMs_ = 2000;
-                float targetPsi_ = 0.0f;  // Current target PSI to send in pings
-
-                // Persistence
-                Preferences prefs_;
-                bool hasPeer_ = false;
-
-                // Pairing
-                bool pairing_ = false;
-                uint32_t pairingTimeoutAt_ = 0;
-                uint32_t nextPairReqAt_ = 0;
-                uint32_t pairReqIntervalMs_ = 500;
-                uint8_t pairingGroupId_ = 0x01;
-
-                // Callback
-                StatusCallback cb_ = nullptr;
-                void* cbCtx_ = nullptr;
-
-                PairCallback pairCb_ = nullptr;
-                void* pairCtx_ = nullptr;
-        };
-
-    } // namespace comms
-} // namespace ta
+} // namespace comms
+} // namespace trailair

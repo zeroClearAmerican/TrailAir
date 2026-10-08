@@ -1,16 +1,22 @@
 #pragma once
 #include <Arduino.h>
+#include <TA_Controller.h>
 
-namespace ta {
-namespace act {
+namespace trailair {
+namespace actuators {
 
 struct Pins {
   int compressorPin;
   int ventPin;
 };
 
-class Actuators {
+// Compressor and vent are mutually exclusive, and each stays off at least MIN_OFF_MS
+// before turning back on (protects relay/compressor from rapid toggling). A turn-on that
+// comes too soon is deferred, not dropped: service() applies it once allowed.
+class Actuators : public trailair::controller::IActuatorOutputs {
 public:
+  static constexpr uint32_t MIN_OFF_MS = 500;
+
   void begin(const Pins& p) {
     pins_ = p;
     // Ensure pins are LOW before setting to OUTPUT to prevent glitches
@@ -18,86 +24,55 @@ public:
     digitalWrite(pins_.ventPin, LOW);
     pinMode(pins_.compressorPin, OUTPUT);
     pinMode(pins_.ventPin, OUTPUT);
-    // Redundant stopAll() for safety
-    stopAll();
-    
-    // Initialize debounce state
-    compressorState_ = false;
-    ventState_ = false;
-    lastCompressorOffTime_ = 0;
-    lastVentOffTime_ = 0;
   }
 
-  void setCompressor(bool on) {
-    // Turning OFF: immediate response
-    if (!on) {
-      if (compressorState_) {
-        digitalWrite(pins_.compressorPin, LOW);
-        compressorState_ = false;
-        lastCompressorOffTime_ = millis();
-      }
-      return;
-    }
-    
-    // Turning ON: apply debounce (500ms since last OFF)
+  void setCompressor(bool on) override {
+    wantCompressor_ = on;
+    if (on) wantVent_ = false;
+    service();
+  }
+
+  void setVent(bool open) override {
+    wantVent_ = open;
+    if (open) wantCompressor_ = false;
+    service();
+  }
+
+  void stopAll() override {
+    wantCompressor_ = wantVent_ = false;
+    service();
+  }
+
+  // Call every loop to complete deferred turn-ons
+  void service() {
     uint32_t now = millis();
-    if (now - lastCompressorOffTime_ < 500) {
-      return;  // Ignore, too soon after turning off
-    }
-    
-    // Safe to turn on
-    if (!compressorState_) {
-      digitalWrite(pins_.ventPin, LOW);  // Ensure vent is off
-      digitalWrite(pins_.compressorPin, HIGH);
-      compressorState_ = true;
-    }
-  }
-
-  void setVent(bool open) {
-    // Turning OFF: immediate response
-    if (!open) {
-      if (ventState_) {
-        digitalWrite(pins_.ventPin, LOW);
-        ventState_ = false;
-        lastVentOffTime_ = millis();
-      }
-      return;
-    }
-    
-    // Turning ON: apply debounce (500ms since last OFF)
-    uint32_t now = millis();
-    if (now - lastVentOffTime_ < 500) {
-      return;  // Ignore, too soon after turning off
-    }
-    
-    // Safe to turn on
-    if (!ventState_) {
-      digitalWrite(pins_.compressorPin, LOW);  // Ensure compressor is off
-      digitalWrite(pins_.ventPin, HIGH);
-      ventState_ = true;
-    }
-  }
-
-  void stopAll() {
-    if (compressorState_) {
-      digitalWrite(pins_.compressorPin, LOW);
-      compressorState_ = false;
-      lastCompressorOffTime_ = millis();
-    }
-    if (ventState_) {
-      digitalWrite(pins_.ventPin, LOW);
-      ventState_ = false;
-      lastVentOffTime_ = millis();
-    }
+    // Offs first, so both outputs are never on together
+    if (!wantCompressor_) drive_(pins_.compressorPin, compressorOn_, compressorOffAt_, false, now);
+    if (!wantVent_)       drive_(pins_.ventPin,       ventOn_,       ventOffAt_,       false, now);
+    if (wantCompressor_)  drive_(pins_.compressorPin, compressorOn_, compressorOffAt_, true,  now);
+    if (wantVent_)        drive_(pins_.ventPin,       ventOn_,       ventOffAt_,       true,  now);
   }
 
 private:
+  static void drive_(int pin, bool& isOn, uint32_t& offAt, bool want, uint32_t now) {
+    if (!want && isOn) {
+      digitalWrite(pin, LOW);
+      isOn = false;
+      offAt = now;
+    } else if (want && !isOn && now - offAt >= MIN_OFF_MS) {
+      digitalWrite(pin, HIGH);
+      isOn = true;
+    }
+  }
+
   Pins pins_{};
-  bool compressorState_ = false;
-  bool ventState_ = false;
-  uint32_t lastCompressorOffTime_ = 0;
-  uint32_t lastVentOffTime_ = 0;
+  bool wantCompressor_ = false;
+  bool wantVent_ = false;
+  bool compressorOn_ = false;
+  bool ventOn_ = false;
+  uint32_t compressorOffAt_ = 0;
+  uint32_t ventOffAt_ = 0;
 };
 
-} // namespace act
-} // namespace ta
+} // namespace actuators
+} // namespace trailair

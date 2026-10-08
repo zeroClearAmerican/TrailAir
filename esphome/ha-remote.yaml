@@ -1,0 +1,290 @@
+# 4-button battery remote for Home Assistant (XIAO ESP32-C3, SSD1306 128x32).
+# Buttons fire HA event entities; HA automations do the work.
+# Per button, configured from HA (no reflash):
+#   - icon: the "<Button> icon" select on the device page
+#   - state: create a Template binary sensor helper with entity id
+#     binary_sensor.ha_remote_<left|down|up|right>; when on, the filled icon shows.
+
+substitutions:
+  name: trailair-remote
+  # Optional HA entity (e.g. an input_text helper) shown as the centre title
+  title_entity: input_text.trailair_remote_title
+
+esphome:
+  name: ${name}
+  friendly_name: TrailAir HA Remote
+  on_boot:
+    then:
+      - script.execute: wake
+
+esp32:
+  board: seeed_xiao_esp32c3
+  framework:
+    type: esp-idf
+
+logger:  # C3 defaults to USB-Serial-JTAG, so GPIO20 (UART RX) stays free for the Right button
+
+api:
+  id: api_srv
+  on_client_connected: [component.update: oled]
+  on_client_disconnected: [component.update: oled]
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: light
+
+# ---- Buttons (active-low, internal pullups) + the HA entity each one reflects ----
+# GPIO8/9 are strapping pins; fine as inputs.
+event:
+  - { platform: template, id: evt_left, name: Left, event_types: [click, double_click, long_press] }
+  - { platform: template, id: evt_down, name: Down, event_types: [click, double_click, long_press] }
+  - { platform: template, id: evt_up, name: Up, event_types: [click, double_click, long_press] }
+  - { platform: template, id: evt_right, name: Right, event_types: [click, double_click, long_press] }
+
+binary_sensor:
+  - platform: gpio
+    id: btn_left
+    internal: true
+    pin: { number: GPIO10, inverted: true, mode: { input: true, pullup: true } }
+    filters: [delayed_on_off: 20ms]
+    on_press: [script.execute: wake]
+    on_release: [component.update: oled]
+    on_multi_click:
+      - timing: [ON for at most 400ms, OFF for at most 300ms, ON for at most 400ms, OFF for at least 200ms]
+        then: [event.trigger: { id: evt_left, event_type: double_click }]
+      - timing: [ON for at most 400ms, OFF for at least 300ms]
+        then: [event.trigger: { id: evt_left, event_type: click }]
+      - timing: [ON for at least 800ms]
+        then: [event.trigger: { id: evt_left, event_type: long_press }]
+  - platform: homeassistant
+    id: ent_left
+    internal: true
+    entity_id: binary_sensor.ha_remote_left
+    on_state: [component.update: oled]
+  - platform: gpio
+    id: btn_down
+    internal: true
+    pin: { number: GPIO9, inverted: true, mode: { input: true, pullup: true }, ignore_strapping_warning: true }
+    filters: [delayed_on_off: 20ms]
+    on_press: [script.execute: wake]
+    on_release: [component.update: oled]
+    on_multi_click:
+      - timing: [ON for at most 400ms, OFF for at most 300ms, ON for at most 400ms, OFF for at least 200ms]
+        then: [event.trigger: { id: evt_down, event_type: double_click }]
+      - timing: [ON for at most 400ms, OFF for at least 300ms]
+        then: [event.trigger: { id: evt_down, event_type: click }]
+      - timing: [ON for at least 800ms]
+        then: [event.trigger: { id: evt_down, event_type: long_press }]
+  - platform: homeassistant
+    id: ent_down
+    internal: true
+    entity_id: binary_sensor.ha_remote_down
+    on_state: [component.update: oled]
+  - platform: gpio
+    id: btn_up
+    internal: true
+    pin: { number: GPIO8, inverted: true, mode: { input: true, pullup: true }, ignore_strapping_warning: true }
+    filters: [delayed_on_off: 20ms]
+    on_press: [script.execute: wake]
+    on_release: [component.update: oled]
+    on_multi_click:
+      - timing: [ON for at most 400ms, OFF for at most 300ms, ON for at most 400ms, OFF for at least 200ms]
+        then: [event.trigger: { id: evt_up, event_type: double_click }]
+      - timing: [ON for at most 400ms, OFF for at least 300ms]
+        then: [event.trigger: { id: evt_up, event_type: click }]
+      - timing: [ON for at least 800ms]
+        then: [event.trigger: { id: evt_up, event_type: long_press }]
+  - platform: homeassistant
+    id: ent_up
+    internal: true
+    entity_id: binary_sensor.ha_remote_up
+    on_state: [component.update: oled]
+  - platform: gpio
+    id: btn_right
+    internal: true
+    pin: { number: GPIO20, inverted: true, mode: { input: true, pullup: true } }
+    filters: [delayed_on_off: 20ms]
+    on_press: [script.execute: wake]
+    on_release: [component.update: oled]
+    on_multi_click:
+      - timing: [ON for at most 400ms, OFF for at most 300ms, ON for at most 400ms, OFF for at least 200ms]
+        then: [event.trigger: { id: evt_right, event_type: double_click }]
+      - timing: [ON for at most 400ms, OFF for at least 300ms]
+        then: [event.trigger: { id: evt_right, event_type: click }]
+      - timing: [ON for at least 800ms]
+        then: [event.trigger: { id: evt_right, event_type: long_press }]
+  - platform: homeassistant
+    id: ent_right
+    internal: true
+    entity_id: binary_sensor.ha_remote_right
+    on_state: [component.update: oled]
+
+select:
+  - platform: template
+    id: sel_left
+    name: Left icon
+    entity_category: config
+    options: [Light, Fan, Plug, Lock, Garage, Blinds, TV, Music, Scene, None]
+    initial_option: None
+    optimistic: true
+    restore_value: true
+    on_value: [component.update: oled]
+  - platform: template
+    id: sel_down
+    name: Down icon
+    entity_category: config
+    options: [Light, Fan, Plug, Lock, Garage, Blinds, TV, Music, Scene, None]
+    initial_option: None
+    optimistic: true
+    restore_value: true
+    on_value: [component.update: oled]
+  - platform: template
+    id: sel_up
+    name: Up icon
+    entity_category: config
+    options: [Light, Fan, Plug, Lock, Garage, Blinds, TV, Music, Scene, None]
+    initial_option: None
+    optimistic: true
+    restore_value: true
+    on_value: [component.update: oled]
+  - platform: template
+    id: sel_right
+    name: Right icon
+    entity_category: config
+    options: [Light, Fan, Plug, Lock, Garage, Blinds, TV, Music, Scene, None]
+    initial_option: None
+    optimistic: true
+    restore_value: true
+    on_value: [component.update: oled]
+
+text_sensor:
+  - platform: homeassistant
+    id: title
+    internal: true
+    entity_id: ${title_entity}
+    on_value: [component.update: oled]
+
+# ---- Battery (2:1 divider on GPIO2) + Wi-Fi signal ----
+sensor:
+  - platform: adc
+    id: batt_v
+    name: Battery Voltage
+    pin: GPIO2
+    attenuation: 12db
+    update_interval: 10s
+    filters:
+      - multiply: 2.0  # ponytail: nominal divider ratio; tweak to match a multimeter reading
+      - sliding_window_moving_average: { window_size: 6, send_every: 6 }
+    unit_of_measurement: V
+    device_class: voltage
+    accuracy_decimals: 2
+    on_value:
+      - component.update: batt_pct
+
+  - platform: template
+    id: batt_pct
+    name: Battery
+    unit_of_measurement: "%"
+    device_class: battery
+    accuracy_decimals: 0
+    update_interval: never
+    # ponytail: linear 3.30V..4.00V; swap for calibrate_polynomial if it reads nonlinear
+    lambda: |-
+      return clamp((id(batt_v).state - 3.30f) / (4.00f - 3.30f) * 100.0f, 0.0f, 100.0f);
+
+  - platform: wifi_signal
+    id: rssi
+    name: WiFi Signal
+    update_interval: 30s
+
+# ---- Display ----
+i2c:
+  sda: GPIO6
+  scl: GPIO7
+  frequency: 400kHz
+
+font:
+  - { file: "gfonts://Roboto", id: f_title, size: 12 }
+  - { file: "gfonts://Roboto", id: f_small, size: 8 }
+
+image:
+  - { file: mdi:wifi-off, id: img_disconnected, resize: 20x20, type: binary }
+# Icon set: order must match the select options and the arrays in the display lambda
+  - { file: mdi:lightbulb, id: img_light_on, resize: 12x12, type: binary }
+  - { file: mdi:lightbulb-outline, id: img_light_off, resize: 12x12, type: binary }
+  - { file: mdi:fan, id: img_fan_on, resize: 12x12, type: binary }
+  - { file: mdi:fan-off, id: img_fan_off, resize: 12x12, type: binary }
+  - { file: mdi:power-plug, id: img_plug_on, resize: 12x12, type: binary }
+  - { file: mdi:power-plug-off, id: img_plug_off, resize: 12x12, type: binary }
+  - { file: mdi:lock, id: img_lock_on, resize: 12x12, type: binary }
+  - { file: mdi:lock-open-variant, id: img_lock_off, resize: 12x12, type: binary }
+  - { file: mdi:garage-open, id: img_garage_on, resize: 12x12, type: binary }
+  - { file: mdi:garage, id: img_garage_off, resize: 12x12, type: binary }
+  - { file: mdi:blinds-open, id: img_blinds_on, resize: 12x12, type: binary }
+  - { file: mdi:blinds, id: img_blinds_off, resize: 12x12, type: binary }
+  - { file: mdi:television, id: img_tv_on, resize: 12x12, type: binary }
+  - { file: mdi:television-off, id: img_tv_off, resize: 12x12, type: binary }
+  - { file: mdi:music, id: img_music_on, resize: 12x12, type: binary }
+  - { file: mdi:music-off, id: img_music_off, resize: 12x12, type: binary }
+  - { file: mdi:star, id: img_scene_on, resize: 12x12, type: binary }
+  - { file: mdi:star-outline, id: img_scene_off, resize: 12x12, type: binary }
+
+# Layout (128x32):  y0-6 status row | y7-19 title | y20-31 four 32px button cells
+display:
+  - platform: ssd1306_i2c
+    id: oled
+    model: SSD1306_128X32
+    address: 0x3C
+    update_interval: 5s
+    lambda: |-
+      // Battery icon, top-left
+      int pct = isnan(id(batt_pct).state) ? 0 : (int) id(batt_pct).state;
+      it.rectangle(0, 0, 12, 6);
+      it.rectangle(12, 2, 1, 2);
+      it.filled_rectangle(1, 1, pct * 10 / 100, 4);
+      if (pct < 15) it.print(15, 0, id(f_small), "!");
+
+      if (!id(api_srv).is_connected()) {
+        it.image(64, 19, id(img_disconnected), ImageAlign::CENTER);
+        return;
+      }
+
+      // Wi-Fi bars, top-right
+      float r = id(rssi).state;
+      int bars = isnan(r) ? 0 : r > -55 ? 4 : r > -65 ? 3 : r > -75 ? 2 : 1;
+      for (int i = 0; i < 4; i++) {
+        int h = i < bars ? i + 3 : 1;
+        it.filled_rectangle(120 + i * 2, 6 - h, 1, h);
+      }
+
+      // Title
+      it.print(64, 13, id(f_title), TextAlign::CENTER, id(title).state.c_str());
+
+      // Button cells: icon from the select (None = blank), filled when the HA helper is on; inverted while held
+      image::Image *on[]  = {id(img_light_on), id(img_fan_on), id(img_plug_on), id(img_lock_on), id(img_garage_on), id(img_blinds_on), id(img_tv_on), id(img_music_on), id(img_scene_on)};
+      image::Image *off[] = {id(img_light_off), id(img_fan_off), id(img_plug_off), id(img_lock_off), id(img_garage_off), id(img_blinds_off), id(img_tv_off), id(img_music_off), id(img_scene_off)};
+      auto cell = [&](int i, binary_sensor::BinarySensor *btn, binary_sensor::BinarySensor *ent, select::Select *sel) {
+        size_t n = sel->active_index().value_or(sizeof(on) / sizeof(on[0]));
+        if (n >= sizeof(on) / sizeof(on[0])) return;
+        image::Image *img = (ent->has_state() && ent->state) ? on[n] : off[n];
+        if (btn->state) it.image(i * 32 + 16, 26, img, ImageAlign::CENTER, COLOR_OFF, COLOR_ON);
+        else            it.image(i * 32 + 16, 26, img, ImageAlign::CENTER);
+      };
+      cell(0, id(btn_left),  id(ent_left),  id(sel_left));
+      cell(1, id(btn_down),  id(ent_down),  id(sel_down));
+      cell(2, id(btn_up),    id(ent_up),    id(sel_up));
+      cell(3, id(btn_right), id(ent_right), id(sel_right));
+
+# Screen on for 30s after any press
+script:
+  - id: wake
+    mode: restart
+    then:
+      - lambda: id(oled).turn_on();
+      - component.update: oled
+      - delay: 90s
+      - lambda: id(oled).turn_off();

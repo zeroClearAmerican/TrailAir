@@ -1,203 +1,129 @@
 #pragma once
 #include <stdint.h>
-#include "TA_Protocol.h"
+#include <TA_Types.h>
 #include <TA_Errors.h>
-
-// Forward declaration for board-specific actuators
-namespace ta { namespace act { class Actuators; } }
 
 namespace trailair {
 namespace controller {
 
 /**
- * @brief Controller states for pressure management
- */
-enum class ControllerState {
-  Idle,      ///< No active pressure adjustment
-  AirUp,     ///< Actively inflating (compressor on)
-  Venting,   ///< Actively deflating (vent open)
-  Checking,  ///< Settling/stabilizing period between bursts
-  Error      ///< Error state requiring user intervention
-};
-
-/**
- * @brief Error codes specific to controller operation
- * 
- * Maps to shared error catalog for wire/display compatibility.
- */
-enum class ErrorCode : uint8_t {
-  None = static_cast<uint8_t>(trailair::errors::ErrorCode::None),
-  NoChange = static_cast<uint8_t>(trailair::errors::ErrorCode::NoChange),
-  ExcessiveTime = static_cast<uint8_t>(trailair::errors::ErrorCode::ExcessiveTime),
-  Unknown = static_cast<uint8_t>(trailair::errors::ErrorCode::Unknown)
-};
-
-/**
- * @brief Abstract interface for actuator control
- * 
- * Injectable outputs for unit testing or alternative hardware drivers.
- * Allows controller logic to be tested independently of hardware.
+ * @brief Actuator outputs the controller drives (hardware, or a fake in tests)
  */
 struct IActuatorOutputs {
   virtual ~IActuatorOutputs() = default;
-  
-  /// @brief Control compressor state
-  /// @param enable true to turn on, false to turn off
   virtual void setCompressor(bool enable) = 0;
-  
-  /// @brief Control vent valve state
-  /// @param open true to open valve, false to close
   virtual void setVent(bool open) = 0;
-  
-  /// @brief Emergency stop - turn off all actuators
   virtual void stopAll() = 0;
 };
 
 /**
- * @brief Configuration parameters for pressure controller
+ * @brief Controller tuning. Pressure limits here are the single source of truth; the board
+ *        UI reads them via PressureController::getConfig().
  */
 struct ControllerConfig {
   // Pressure limits
-  float minimumPSI = 5.0f;                                ///< Minimum allowed pressure
-  float maximumPSI = 50.0f;                               ///< Maximum allowed pressure
-  float pressureTolerancePSI = 0.1f;                      ///< Acceptable error around target
-  
+  float minimumPSI = 5.0f;                                ///< Lowest seek target
+  float maximumPSI = 50.0f;                               ///< Highest seek target; also the manual air cutoff
+  // Done when settled within +/- this. Below 0.5 so the rounded display reads exactly the target,
+  // above the sensor's averaged noise (~0.1 PSI) so seeks don't hunt.
+  float pressureTolerancePSI = 0.3f;
+
   // Timing parameters
-  uint32_t settleDurationMilliseconds = 1000;             ///< Settling time between bursts
-  uint32_t initialBurstDurationMilliseconds = 5000;       ///< First burst duration
-  uint32_t minimumRunDurationMilliseconds = 1000;         ///< Minimum continuous run time
-  uint32_t maximumRunDurationMilliseconds = 4000;         ///< Maximum continuous run time
-  uint32_t manualRefreshTimeoutMilliseconds = 1000;       ///< Manual mode watchdog timeout
+  uint32_t settleDurationMilliseconds = 1500;             ///< Hose/tire equalize + sensor average window refill
+  uint32_t initialBurstDurationMilliseconds = 5000;       ///< Longest probe burst (used to learn a direction's rate)
+  uint32_t minimumRunDurationMilliseconds = 500;          ///< Shortest burst
+  uint32_t maximumRunDurationMilliseconds = 8000;         ///< Longest predicted burst before re-checking
   uint32_t maximumContinuousDurationMilliseconds = 30UL * 60UL * 1000UL; ///< 30 minute safety limit
-  
-  // Learning and adaptation parameters
-  float noChangeThresholdPSI = 0.02f;                     ///< Threshold to detect stalled progress
-  int maximumNoChangeBursts = 3;                          ///< Max bursts without progress before error
-  float approachMarginPSI = 0.2f;                         ///< Safety margin before final approach
-  float pressureNoiseThresholdPSI = 0.01f;                ///< Noise threshold for rate calculation
+  uint32_t manualLeaseMilliseconds = 1000;                ///< Manual output stops unless renewed this often
+
+  // Learning and adaptation parameters (PSI thresholds sit above the sensor noise floor)
+  float noChangeThresholdPSI = 0.2f;                      ///< Probe burst moving less than this = no progress
+  int maximumNoChangeBursts = 3;                          ///< Consecutive no-progress probes before error
+  float approachMarginPSI = 0.2f;                         ///< Aim this far short of target (< tolerance, so we land inside)
+  /// Probes in an unlearned direction are sized as if the rate were this fast, so they can't
+  /// overshoot unless the real rate is faster. Raise for small tires on a big compressor.
+  float maximumExpectedRatePSIPerSecond = 1.0f;
+  float pressureNoiseThresholdPSI = 0.2f;                 ///< Smaller changes don't count toward rate learning
   float minimumRateThreshold = 0.001f;                    ///< Minimum rate to consider valid (PSI/sec)
   float minimumCheckIntervalSeconds = 0.02f;              ///< Minimum time window for rate calc
 };
 
 /**
- * @brief Intelligent pressure controller with adaptive learning
- * 
- * Manages automatic pressure seeking with:
- * - Adaptive burst duration based on learned inflation/deflation rates
- * - Safety timeouts and error detection
- * - Manual override capability
- * - Hardware abstraction for testability
+ * @brief Pressure seek and manual control with adaptive burst timing.
+ *
+ * Seek: probe bursts learn the inflate/vent rates, then predicted runs aim just short of
+ * target, with settle/check pauses between them. Stalls and impossible seeks raise errors.
+ * Decisions use settled readings only: while air flows the sensor reads the hose, not the tire
+ * (high when inflating, low when venting), so live readings only enforce the maximumPSI cap.
+ *
+ * Manual: manualAirUp/manualVent(true) start or renew a lease of manualLeaseMilliseconds.
+ * The caller must keep renewing while the button is held; if renewals stop (lost radio
+ * release, dead remote) the controller stops on its own. Manual air also stops with an
+ * OverPressure error at maximumPSI.
+ *
+ * All commands take effect synchronously: after startSeek() the state is already AirUp,
+ * Venting or (already at target) Idle. Time is always passed in, never read.
  */
 class PressureController {
 public:
-  PressureController() = default;
-  
-  /// @brief Initialize with hardware actuators (backward compatible)
-  /// @param actuators Pointer to hardware actuator interface
-  /// @param config Controller configuration parameters
-  void begin(ta::act::Actuators* actuators, const ControllerConfig& config);
-
-  /// @brief Initialize with abstract outputs (for testing)
-  /// @param outputs Abstract actuator interface
-  /// @param config Controller configuration parameters
   void begin(IActuatorOutputs* outputs, const ControllerConfig& config);
 
-  /// @brief Update controller state (call every loop)
-  /// @param currentTimeMilliseconds Current time in milliseconds
-  /// @param currentPressurePSI Current measured pressure
-  void update(uint32_t currentTimeMilliseconds, float currentPressurePSI);
+  /// Call every loop with the latest filtered pressure
+  void update(uint32_t now, float currentPSI);
 
-  // Commands
-  
-  /// @brief Start automatic seeking to target pressure
-  /// @param targetPSI Desired pressure (will be clamped to min/max)
-  void startSeek(float targetPSI);
-  
-  /// @brief Manual air up control (direct compressor activation)
-  /// @param active true to activate, false to deactivate
-  void manualAirUp(bool active);
-  
-  /// @brief Manual vent control (direct valve activation)
-  /// @param active true to activate, false to deactivate
-  void manualVent(bool active);
-  
-  /// @brief Cancel current operation and return to idle
+  /// Seek to targetPSI (clamped to the configured limits)
+  void startSeek(float targetPSI, uint32_t now);
+  /// Start/renew (true) or stop (false) manual air. A stop only affects manual air.
+  void manualAirUp(bool active, uint32_t now);
+  /// Start/renew (true) or stop (false) manual vent. A stop only affects manual vent.
+  void manualVent(bool active, uint32_t now);
+  /// Stop any seek or manual action (does not clear an error)
   void cancel();
-  
-  /// @brief Clear error state and return to idle
   void clearError();
 
-  // Accessors
-  
-  /// @brief Get current controller state
   ControllerState getState() const { return _state; }
-  
-  /// @brief Get current error code
-  ErrorCode getError() const { return _errorCode; }
-  
-  /// @brief Get current target pressure
+  trailair::errors::ErrorCode getError() const { return _errorCode; }
   float getTargetPSI() const { return _targetPSI; }
-  
-  /// @brief Get last measured pressure
   float getCurrentPSI() const { return _currentPSI; }
-
-  /// @brief Get protocol status character
-  /// @return Single character representing state ('I', 'U', 'V', 'C', 'E')
-  char getStatusCharacter() const;
-  
-  /// @brief Get error code as byte (for protocol transmission)
-  uint8_t getErrorByte() const { return static_cast<uint8_t>(_errorCode); }
+  bool isManualActive() const { return _isManualActive; }
+  const ControllerConfig& getConfig() const { return _config; }
 
 private:
-  // State handlers
-  void handleRunPhase(ControllerState runState, uint32_t now);
-  void handleCheckingPhase(uint32_t now);
-  void handleIdleState(uint32_t now);
-  
-  void enterState(ControllerState state, uint32_t now);
-  void stopAllOutputs();
-  void scheduleBurst(ControllerState direction, uint32_t durationMilliseconds, uint32_t now);
-  void enterErrorState(ErrorCode errorCode, const char* reason);
-  void reset();
-
-  // Hardware abstraction
-  
-  /// @brief Adapter to wrap board Actuators as IActuatorOutputs
-  struct ActuatorAdapter : IActuatorOutputs {
-    ta::act::Actuators* hardware = nullptr;
-    void setCompressor(bool enable) override;
-    void setVent(bool open) override;
-    void stopAll() override;
-  } _actuatorAdapter;
+  void manual_(ControllerState direction, bool active, uint32_t now);
+  void stopManual_();
+  void runOutputs_(ControllerState direction);
+  void handleRunPhase_(uint32_t now);
+  void handleCheckingPhase_(uint32_t now);
+  void endBurst_(uint32_t now);
+  void scheduleBurst_(ControllerState direction, uint32_t durationMilliseconds, uint32_t now);
+  void scheduleProbe_(float remaining, uint32_t now);
+  void enterError_(trailair::errors::ErrorCode code);
+  void stopAllOutputs_();
 
   IActuatorOutputs* _outputs = nullptr;
   ControllerConfig _config{};
 
-  // State tracking
   ControllerState _state = ControllerState::Idle;
-  ControllerState _previousState = ControllerState::Idle;
-
-  // Runtime state
+  trailair::errors::ErrorCode _errorCode = trailair::errors::ErrorCode::None;
   float _targetPSI = 0.0f;
   float _currentPSI = 0.0f;
-  bool _isManualActive = false;
-  uint32_t _lastManualRefreshTime = 0;
 
-  // Phase tracking
-  bool _isContinuousPhase = false;
+  // Manual
+  bool _isManualActive = false;
+  uint32_t _manualLeaseEnd = 0;
+
+  // Burst/check phase
+  bool _skipStallCheck = false;
   uint32_t _phaseStartTime = 0;
   uint32_t _phaseEndTime = 0;
   uint32_t _lastBurstEndTime = 0;
   float _phaseStartPressure = 0.0f;
 
-  // Learned rates (adaptive control)
+  // Learned rates
   float _inflationRatePSIPerSecond = 0.0f;
   float _deflationRatePSIPerSecond = 0.0f;
   int _inflationSampleCount = 0;
   int _deflationSampleCount = 0;
-
-  // Error detection
-  ErrorCode _errorCode = ErrorCode::None;
   int _noChangeDetectionCount = 0;
 };
 

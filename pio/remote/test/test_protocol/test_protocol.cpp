@@ -1,370 +1,145 @@
 /**
- * Unit tests for TA_Protocol
- * Tests pack/unpack of all message types, edge cases, and data integrity
+ * Unit tests for TA_Protocol (wire format v2)
  */
 
 #include <gtest/gtest.h>
 #include <TA_Protocol.h>
 
-using namespace ta::protocol;
+using namespace trailair;
+using namespace trailair::protocol;
 
 // ============================================================================
-// PSI Conversion Tests
+// PSI conversion
 // ============================================================================
 
-TEST(Protocol, PsiToByte_NormalRange) {
-    EXPECT_EQ(convertPSIToByte(0.0f), 0);
-    EXPECT_EQ(convertPSIToByte(10.0f), 20);
-    EXPECT_EQ(convertPSIToByte(30.0f), 60);
-    EXPECT_EQ(convertPSIToByte(63.5f), 127);
-}
-
-TEST(Protocol, PsiToByte_HalfSteps) {
-    EXPECT_EQ(convertPSIToByte(0.5f), 1);
-    EXPECT_EQ(convertPSIToByte(15.5f), 31);
-    EXPECT_EQ(convertPSIToByte(30.5f), 61);
-}
-
-TEST(Protocol, PsiToByte_Clamping) {
-    EXPECT_EQ(convertPSIToByte(-10.0f), 0);    // negative clamped to 0
-    EXPECT_EQ(convertPSIToByte(200.0f), 255);  // over max clamped to 127.5 PSI = 255
-}
-
-TEST(Protocol, ByteToPsi_NormalRange) {
-    EXPECT_FLOAT_EQ(convertByteToPSI(0), 0.0f);
-    EXPECT_FLOAT_EQ(convertByteToPSI(20), 10.0f);
-    EXPECT_FLOAT_EQ(convertByteToPSI(60), 30.0f);
-    EXPECT_FLOAT_EQ(convertByteToPSI(127), 63.5f);
-}
-
-TEST(Protocol, ByteToPsi_HalfSteps) {
-    EXPECT_FLOAT_EQ(convertByteToPSI(1), 0.5f);
-    EXPECT_FLOAT_EQ(convertByteToPSI(31), 15.5f);
+TEST(Protocol, PsiToByte) {
+    EXPECT_EQ(psiToByte(0.0f), 0);
+    EXPECT_EQ(psiToByte(30.0f), 60);
+    EXPECT_EQ(psiToByte(15.5f), 31);
+    EXPECT_EQ(psiToByte(-10.0f), 0);    // clamped
+    EXPECT_EQ(psiToByte(200.0f), 255);  // clamped to 127.5
 }
 
 TEST(Protocol, PsiRoundTrip) {
-    float original = 25.5f;
-    uint8_t packed = convertPSIToByte(original);
-    float unpacked = convertByteToPSI(packed);
-    EXPECT_FLOAT_EQ(unpacked, original);
+    EXPECT_FLOAT_EQ(byteToPsi(psiToByte(25.5f)), 25.5f);
+    EXPECT_FLOAT_EQ(byteToPsi(psiToByte(127.5f)), 127.5f);
 }
 
 // ============================================================================
-// Request Packing/Parsing Tests
+// Round trips
 // ============================================================================
 
-TEST(Protocol, PackRequest_Idle) {
-    Request req;
-    req.kind = Request::Kind::Idle;
-    
-    uint8_t buf[PAYLOAD_LENGTH];
-    packRequest(buf, req);
-    
-    EXPECT_EQ(buf[0], static_cast<uint8_t>(Cmd::Idle));
-    EXPECT_EQ(buf[1], 0);
+static Frame roundTrip(const Frame& in, int expectedLength) {
+    uint8_t buf[MAX_FRAME_LENGTH];
+    int len = pack(buf, in);
+    EXPECT_EQ(len, expectedLength);
+    EXPECT_EQ(buf[0], MAGIC);
+    Frame out;
+    EXPECT_TRUE(parse(buf, len, out));
+    EXPECT_EQ(out.type, in.type);
+    return out;
 }
 
-TEST(Protocol, PackRequest_Start) {
-    Request req;
-    req.kind = Request::Kind::Start;
-    req.targetPressurePSI = 30.0f;
-    
-    uint8_t buf[PAYLOAD_LENGTH];
-    packRequest(buf, req);
-    
-    EXPECT_EQ(buf[0], static_cast<uint8_t>(Cmd::Start));
-    EXPECT_EQ(buf[1], 60); // 30 PSI * 2
+TEST(Protocol, ButtonFramesRoundTrip) {
+    const ButtonAction actions[] = { ButtonAction::Pressed, ButtonAction::Released,
+                                     ButtonAction::Click, ButtonAction::LongHold };
+    for (ButtonAction a : actions) {
+        for (uint8_t b = 0; b < BUTTON_COUNT; ++b) {
+            Frame f;
+            f.type = buttonFrameType(a);
+            f.button = static_cast<ButtonId>(b);
+            Frame out = roundTrip(f, 3);
+            EXPECT_EQ(out.button, f.button);
+            ButtonAction back;
+            ASSERT_TRUE(buttonAction(out.type, back));
+            EXPECT_EQ(back, a);
+        }
+    }
 }
 
-TEST(Protocol, PackRequest_ManualVent) {
-    Request req;
-    req.kind = Request::Kind::Manual;
-    req.manualMode = ManualCode::Vent;
-    
-    uint8_t buf[PAYLOAD_LENGTH];
-    packRequest(buf, req);
-    
-    EXPECT_EQ(buf[0], static_cast<uint8_t>(Cmd::Manual));
-    EXPECT_EQ(buf[1], 0x00);
+TEST(Protocol, StatusRoundTrip) {
+    Frame f;
+    f.type = FrameType::Status;
+    f.status.state = ControllerState::AirUp;
+    f.status.view = View::Seeking;
+    f.status.currentPSI = 28.5f;
+    f.status.targetPSI = 32.0f;
+    f.status.errorCode = 0;
+    Frame out = roundTrip(f, 7);
+    EXPECT_EQ(out.status.state, ControllerState::AirUp);
+    EXPECT_EQ(out.status.view, View::Seeking);
+    EXPECT_FLOAT_EQ(out.status.currentPSI, 28.5f);
+    EXPECT_FLOAT_EQ(out.status.targetPSI, 32.0f);
 }
 
-TEST(Protocol, PackRequest_ManualAir) {
-    Request req;
-    req.kind = Request::Kind::Manual;
-    req.manualMode = ManualCode::Air;
-    
-    uint8_t buf[PAYLOAD_LENGTH];
-    packRequest(buf, req);
-    
-    EXPECT_EQ(buf[0], static_cast<uint8_t>(Cmd::Manual));
-    EXPECT_EQ(buf[1], 0xFF);
+TEST(Protocol, StatusCarriesErrorAndPressureTogether) {
+    Frame f;
+    f.type = FrameType::Status;
+    f.status.state = ControllerState::Error;
+    f.status.view = View::Error;
+    f.status.currentPSI = 50.0f;
+    f.status.errorCode = 4;  // OverPressure
+    Frame out = roundTrip(f, 7);
+    EXPECT_EQ(out.status.errorCode, 4);
+    EXPECT_FLOAT_EQ(out.status.currentPSI, 50.0f);
 }
 
-TEST(Protocol, PackRequest_Ping) {
-    Request req;
-    req.kind = Request::Kind::Ping;
-    
-    uint8_t buf[PAYLOAD_LENGTH];
-    packRequest(buf, req);
-    
-    EXPECT_EQ(buf[0], static_cast<uint8_t>(Cmd::Ping));
-    EXPECT_EQ(buf[1], 0);
-}
-
-TEST(Protocol, ParseRequest_Idle) {
-    uint8_t data[] = {'I', 0x00};
-    Request req;
-    
-    ASSERT_TRUE(parseRequest(data, PAYLOAD_LENGTH, req));
-    EXPECT_EQ(req.kind, Request::Kind::Idle);
-}
-
-TEST(Protocol, ParseRequest_Start) {
-    uint8_t data[] = {'S', 40}; // 20 PSI
-    Request req;
-    
-    ASSERT_TRUE(parseRequest(data, PAYLOAD_LENGTH, req));
-    EXPECT_EQ(req.kind, Request::Kind::Start);
-    EXPECT_FLOAT_EQ(req.targetPressurePSI, 20.0f);
-}
-
-TEST(Protocol, ParseRequest_ManualVent) {
-    uint8_t data[] = {'M', 0x00};
-    Request req;
-    
-    ASSERT_TRUE(parseRequest(data, PAYLOAD_LENGTH, req));
-    EXPECT_EQ(req.kind, Request::Kind::Manual);
-    EXPECT_EQ(req.manualMode, ManualCode::Vent);
-}
-
-TEST(Protocol, ParseRequest_ManualAir) {
-    uint8_t data[] = {'M', 0xFF};
-    Request req;
-    
-    ASSERT_TRUE(parseRequest(data, PAYLOAD_LENGTH, req));
-    EXPECT_EQ(req.kind, Request::Kind::Manual);
-    EXPECT_EQ(req.manualMode, ManualCode::Air);
-}
-
-TEST(Protocol, ParseRequest_InvalidLength) {
-    uint8_t data[] = {'S', 40, 99}; // 3 bytes
-    Request req;
-    
-    EXPECT_FALSE(parseRequest(data, 3, req));
-}
-
-TEST(Protocol, ParseRequest_InvalidCommand) {
-    uint8_t data[] = {'X', 0x00}; // Unknown command
-    Request req;
-    
-    EXPECT_FALSE(parseRequest(data, PAYLOAD_LENGTH, req));
-}
-
-TEST(Protocol, RequestRoundTrip_Start) {
-    Request original;
-    original.kind = Request::Kind::Start;
-    original.targetPressurePSI = 35.5f;
-    
-    uint8_t buf[PAYLOAD_LENGTH];
-    packRequest(buf, original);
-    
-    Request parsed;
-    ASSERT_TRUE(parseRequest(buf, PAYLOAD_LENGTH, parsed));
-    
-    EXPECT_EQ(parsed.kind, original.kind);
-    EXPECT_FLOAT_EQ(parsed.targetPressurePSI, original.targetPressurePSI);
+TEST(Protocol, SimpleFramesRoundTrip) {
+    const FrameType types[] = { FrameType::Ping, FrameType::PairRequest, FrameType::PairAck, FrameType::PairBusy };
+    for (FrameType t : types) {
+        Frame f;
+        f.type = t;
+        roundTrip(f, 2);
+    }
 }
 
 // ============================================================================
-// Response Parsing Tests
+// Rejection
 // ============================================================================
 
-TEST(Protocol, ParseResponse_Idle) {
-    uint8_t data[] = {'I', 50}; // Idle at 25 PSI
-    Response resp;
-    
-    ASSERT_TRUE(parseResponse(data, PAYLOAD_LENGTH, resp));
-    EXPECT_EQ(resp.status, Status::Idle);
-    EXPECT_EQ(resp.value, 50);
-    EXPECT_FLOAT_EQ(convertByteToPSI(resp.value), 25.0f);
+TEST(Protocol, RejectsBadMagic) {
+    uint8_t data[] = { 0x00, 'P' };
+    Frame f;
+    EXPECT_FALSE(parse(data, 2, f));
 }
 
-TEST(Protocol, ParseResponse_AirUp) {
-    uint8_t data[] = {'U', 30};
-    Response resp;
-    
-    ASSERT_TRUE(parseResponse(data, PAYLOAD_LENGTH, resp));
-    EXPECT_EQ(resp.status, Status::AirUp);
-    EXPECT_EQ(resp.value, 30);
+TEST(Protocol, RejectsUnknownType) {
+    uint8_t data[] = { MAGIC, 'Z' };
+    Frame f;
+    EXPECT_FALSE(parse(data, 2, f));
 }
 
-TEST(Protocol, ParseResponse_Venting) {
-    uint8_t data[] = {'V', 60};
-    Response resp;
-    
-    ASSERT_TRUE(parseResponse(data, PAYLOAD_LENGTH, resp));
-    EXPECT_EQ(resp.status, Status::Venting);
-    EXPECT_EQ(resp.value, 60);
+TEST(Protocol, RejectsWrongLength) {
+    uint8_t data[] = { MAGIC, 'D', 0, 0 };
+    Frame f;
+    EXPECT_FALSE(parse(data, 4, f));  // button frame is 3 bytes
+    EXPECT_FALSE(parse(data, 2, f));
+    EXPECT_FALSE(parse(data, 1, f));
 }
 
-TEST(Protocol, ParseResponse_Checking) {
-    uint8_t data[] = {'C', 58};
-    Response resp;
-    
-    ASSERT_TRUE(parseResponse(data, PAYLOAD_LENGTH, resp));
-    EXPECT_EQ(resp.status, Status::Checking);
-    EXPECT_EQ(resp.value, 58);
+TEST(Protocol, RejectsOutOfRangeButton) {
+    uint8_t data[] = { MAGIC, 'C', BUTTON_COUNT };
+    Frame f;
+    EXPECT_FALSE(parse(data, 3, f));
 }
 
-TEST(Protocol, ParseResponse_Error) {
-    uint8_t data[] = {'E', 42}; // Error code 42
-    Response resp;
-    
-    ASSERT_TRUE(parseResponse(data, PAYLOAD_LENGTH, resp));
-    EXPECT_EQ(resp.status, Status::Error);
-    EXPECT_EQ(resp.value, 42); // Error code, not PSI
+TEST(Protocol, RejectsInvalidStatusFields) {
+    uint8_t badState[] = { MAGIC, 'S', 'Q', 'I', 0, 0, 0 };
+    uint8_t remoteOnlyView[] = { MAGIC, 'S', 'I', static_cast<uint8_t>(View::Pairing), 0, 0, 0 };
+    Frame f;
+    EXPECT_FALSE(parse(badState, 7, f));
+    EXPECT_FALSE(parse(remoteOnlyView, 7, f));  // board never sends remote-local screens
 }
 
-TEST(Protocol, ParseResponse_InvalidLength) {
-    uint8_t data[] = {'I'}; // 1 byte
-    Response resp;
-    
-    EXPECT_FALSE(parseResponse(data, 1, resp));
+TEST(Protocol, RejectsLegacyV1Frames) {
+    uint8_t v1Status[] = { 'I', 'I', 60, 64 };  // old 4-byte status
+    uint8_t v1Pair[] = { 'R', 0x01 };
+    Frame f;
+    EXPECT_FALSE(parse(v1Status, 4, f));
+    EXPECT_FALSE(parse(v1Pair, 2, f));
 }
 
-TEST(Protocol, ParseResponse_InvalidStatus) {
-    uint8_t data[] = {'Z', 50}; // Unknown status
-    Response resp;
-    
-    EXPECT_FALSE(parseResponse(data, PAYLOAD_LENGTH, resp));
-}
-
-// ============================================================================
-// Pairing Frame Tests
-// ============================================================================
-
-TEST(Protocol, packPairingRequest) {
-    uint8_t buf[PAYLOAD_LENGTH];
-    packPairingRequest(buf, 123);
-    
-    EXPECT_EQ(buf[0], 'R');
-    EXPECT_EQ(buf[1], 123);
-}
-
-TEST(Protocol, packPairingAcknowledge) {
-    uint8_t buf[PAYLOAD_LENGTH];
-    packPairingAcknowledge(buf, 123);
-    
-    EXPECT_EQ(buf[0], 'A');
-    EXPECT_EQ(buf[1], 123);
-}
-
-TEST(Protocol, packPairingBusy) {
-    uint8_t buf[PAYLOAD_LENGTH];
-    packPairingBusy(buf, 1);
-    
-    EXPECT_EQ(buf[0], 'B');
-    EXPECT_EQ(buf[1], 1);
-}
-
-TEST(Protocol, IsPairingFrame_Req) {
-    uint8_t data[] = {'R', 123};
-    EXPECT_TRUE(isPairingFrame(data, PAYLOAD_LENGTH));
-}
-
-TEST(Protocol, IsPairingFrame_Ack) {
-    uint8_t data[] = {'A', 123};
-    EXPECT_TRUE(isPairingFrame(data, PAYLOAD_LENGTH));
-}
-
-TEST(Protocol, IsPairingFrame_Busy) {
-    uint8_t data[] = {'B', 1};
-    EXPECT_TRUE(isPairingFrame(data, PAYLOAD_LENGTH));
-}
-
-TEST(Protocol, IsPairingFrame_NotPairing) {
-    uint8_t data[] = {'I', 50}; // Status frame
-    EXPECT_FALSE(isPairingFrame(data, PAYLOAD_LENGTH));
-}
-
-TEST(Protocol, ParsePair_Req) {
-    uint8_t data[] = {'R', 99};
-    PairMsg msg;
-    
-    ASSERT_TRUE(parsePairingMessage(data, PAYLOAD_LENGTH, msg));
-    EXPECT_EQ(msg.operation, PairOp::Req);
-    EXPECT_EQ(msg.value, 99);
-}
-
-TEST(Protocol, ParsePair_Ack) {
-    uint8_t data[] = {'A', 99};
-    PairMsg msg;
-    
-    ASSERT_TRUE(parsePairingMessage(data, PAYLOAD_LENGTH, msg));
-    EXPECT_EQ(msg.operation, PairOp::Ack);
-    EXPECT_EQ(msg.value, 99);
-}
-
-TEST(Protocol, ParsePair_Busy) {
-    uint8_t data[] = {'B', 2};
-    PairMsg msg;
-    
-    ASSERT_TRUE(parsePairingMessage(data, PAYLOAD_LENGTH, msg));
-    EXPECT_EQ(msg.operation, PairOp::Busy);
-    EXPECT_EQ(msg.value, 2);
-}
-
-TEST(Protocol, ParsePair_Invalid) {
-    uint8_t data[] = {'I', 50}; // Not a pairing frame
-    PairMsg msg;
-    
-    EXPECT_FALSE(parsePairingMessage(data, PAYLOAD_LENGTH, msg));
-}
-
-TEST(Protocol, PairRoundTrip) {
-    uint8_t buf[PAYLOAD_LENGTH];
-    packPairingRequest(buf, 42);
-    
-    PairMsg msg;
-    ASSERT_TRUE(parsePairingMessage(buf, PAYLOAD_LENGTH, msg));
-    
-    EXPECT_EQ(msg.operation, PairOp::Req);
-    EXPECT_EQ(msg.value, 42);
-}
-
-// ============================================================================
-// Edge Cases
-// ============================================================================
-
-TEST(Protocol, MaxPsiValue) {
-    // Maximum representable PSI is 127.5 (255 / 2)
-    float maxPsi = 127.5f;
-    uint8_t packed = convertPSIToByte(maxPsi);
-    EXPECT_EQ(packed, 255);
-    
-    float unpacked = convertByteToPSI(packed);
-    EXPECT_FLOAT_EQ(unpacked, maxPsi);
-}
-
-TEST(Protocol, ZeroPsi) {
-    Request req;
-    req.kind = Request::Kind::Start;
-    req.targetPressurePSI = 0.0f;
-    
-    uint8_t buf[PAYLOAD_LENGTH];
-    packRequest(buf, req);
-    
-    EXPECT_EQ(buf[1], 0);
-    
-    Request parsed;
-    parseRequest(buf, PAYLOAD_LENGTH, parsed);
-    EXPECT_FLOAT_EQ(parsed.targetPressurePSI, 0.0f);
-}
-
-// ============================================================================
-// Main function
-// ============================================================================
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
